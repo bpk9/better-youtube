@@ -1,0 +1,27 @@
+services:
+  better-youtube:
+    build: .
+    container_name: better-youtube
+    restart: unless-stopped
+    ports:
+      - "${BETTER_BIND_IP}:8447:8447"
+    env_file: .env
+    environment:
+      BETTER_DATA: /data
+    volumes:
+      - ./state:/data
+      - ./tls:/tls:ro
+    cpus: 0.5
+    mem_limit: 512m
+    pids_limit: 80
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"

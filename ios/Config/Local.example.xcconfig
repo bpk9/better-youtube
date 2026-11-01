@@ -1,0 +1,3 @@
+// Choose a unique bundle ID and your Apple development team for device builds.
+BETTER_BUNDLE_ID = com.example.betteryoutube
+DEVELOPMENT_TEAM =

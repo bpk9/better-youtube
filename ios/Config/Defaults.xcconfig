@@ -1,0 +1,5 @@
+BETTER_BUNDLE_ID = com.example.betteryoutube
+DEVELOPMENT_TEAM =
+GOOGLE_REVERSED_CLIENT_ID = betteryoutube-google-unconfigured
+#include? "Google.local.xcconfig"
+#include? "Local.xcconfig"
