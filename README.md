@@ -2,6 +2,14 @@
 
 **Your time. Your feed.** An iPhone app with a native interface for discovering, watching, and saving YouTube videos, plus an optional self-hosted companion for offline downloads.
 
+<table>
+  <tr>
+    <td><img src="docs/screenshots/home-28495f91.jpg" alt="Home feed" width="300"></td>
+    <td><img src="docs/screenshots/following-df3e9a73.jpg" alt="Following feed" width="300"></td>
+    <td><img src="docs/screenshots/library-2f6b74eb.jpg" alt="Offline download library" width="300"></td>
+  </tr>
+</table>
+
 ## Repository layout
 
 ```text
