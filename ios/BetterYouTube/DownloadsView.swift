@@ -1,12 +1,10 @@
 import SwiftUI
 
 struct DownloadsView: View {
-    @ObservedObject var engine: YouTubeEngine
     @ObservedObject private var library = OfflineLibrary.shared
     @Environment(\.dismiss) private var dismiss
     @State private var channel = ""
     @State private var adding = false
-    @State private var removeID: String?
     var body: some View {
         NavigationStack {
             List {
@@ -23,23 +21,6 @@ struct DownloadsView: View {
                     Section {
                         Label(library.connected ? "Companion connected" : "Companion offline", systemImage: library.connected ? "checkmark.shield" : "wifi.slash")
                         if let error = library.error { Text(error).font(.caption).foregroundStyle(.orange) }
-                    }
-                }
-                Section("Downloads") {
-                    if library.records.isEmpty { Text("Tap Download on any video. Finished downloads play here without an internet connection.").foregroundStyle(.secondary).font(.subheadline) }
-                    ForEach(library.records) { record in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(record.video.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                            HStack {
-                                Text(status(record)).font(.caption).foregroundStyle(record.state == "ready" ? .green : .secondary)
-                                Spacer()
-                                if record.state == "ready" { Button { engine.play(record.video); dismiss() } label: { Image(systemName: "play.fill") }.accessibilityLabel("Play offline \(record.video.title)").accessibilityIdentifier("offline-\(record.id)") }
-                                if ["failed", "expired"].contains(record.state) { Button("Retry") { library.download(record.video) }.font(.caption) }
-                                Button { removeID = record.id } label: { Image(systemName: "trash") }.foregroundStyle(.secondary).accessibilityLabel("Remove download")
-                            }
-                            if record.state == "downloading" { ProgressView(value: record.progress) }
-                            if let error = record.error { Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(4) }
-                        }.padding(.vertical, 5)
                     }
                 }
                 Section {
@@ -59,24 +40,132 @@ struct DownloadsView: View {
                     }
                 } header: { Text("Automatic downloads") } footer: { Text("Your server checks every 30 minutes. iOS decides when to wake this app to fetch ready files; opening the app syncs immediately. Force-quitting can prevent background transfers until you open it again. The companion keeps a 5 GB, seven-day cache and prepares one video at a time.") }
             }
-            .navigationTitle("Downloads").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Download settings").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task { await library.sync() }
-            .confirmationDialog("Remove this download from your iPhone?", isPresented: Binding(get: { removeID != nil }, set: { if !$0 { removeID = nil } }), titleVisibility: .visible) {
-                Button("Remove download", role: .destructive) { if let id = removeID { library.remove(id) }; removeID = nil }
-            }
+
         }
     }
-    private func status(_ record: DownloadRecord) -> String {
-        switch record.state {
-        case "ready": return "Available offline · " + ByteCountFormatter.string(fromByteCount: record.bytes, countStyle: .file)
+}
+
+struct DownloadLibraryView: View {
+    @ObservedObject var engine: YouTubeEngine
+    var openSettings: () -> Void
+    @ObservedObject private var library = OfflineLibrary.shared
+    @State private var removing: DownloadRecord?
+    private var ready: [DownloadRecord] { library.records.filter { $0.state == "ready" } }
+    private var pending: [DownloadRecord] { library.records.filter { $0.state != "ready" } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("\(ready.count) ready to watch", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                    Text("\(ByteCountFormatter.string(fromByteCount: library.storageBytes, countStyle: .file)) of 2 GB used")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(action: openSettings) { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }
+                    .buttonStyle(.plain).foregroundStyle(accent).accessibilityLabel("Download settings").accessibilityIdentifier("openDownloads")
+            }
+            if !library.isConfigured {
+                notice("Downloads need setup", message: "Connect your companion in download settings to start downloading.", icon: "server.rack")
+            } else if let error = library.error {
+                notice("Couldn’t refresh downloads", message: error, icon: "wifi.slash")
+            } else if library.syncing {
+                HStack(spacing: 10) { ProgressView(); Text("Checking downloads…").font(.caption).foregroundStyle(.secondary) }
+                    .accessibilityIdentifier("downloadsLoading")
+            } else if !library.connected {
+                notice("Companion offline", message: "Videos already downloaded are ready to play. Pull down to try connecting again.", icon: "wifi.slash")
+            }
+            if library.records.isEmpty {
+                VStack(alignment: .leading, spacing: 14) {
+                    Image(systemName: "arrow.down.circle").font(.system(size: 34, weight: .light)).foregroundStyle(accent)
+                    Text("Take a few favorites with you").font(.title3.bold())
+                    Text("Choose Download from a video’s menu. You’ll see its progress here, then watch it anytime, even offline.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
+                    .background(panel, in: RoundedRectangle(cornerRadius: 22))
+                    .accessibilityIdentifier("downloadsEmpty")
+            }
+            if !pending.isEmpty {
+                Text("In progress & needs attention").font(.headline)
+                ForEach(pending) { record in downloadCard(record) }
+            }
+            if !ready.isEmpty {
+                Text("Available offline").font(.headline)
+                LazyVStack(spacing: 18) { ForEach(ready) { record in downloadCard(record) } }
+            }
+        }
+        .task { await library.sync() }
+        .confirmationDialog("Remove this download from your iPhone?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
+            Button("Remove download", role: .destructive) { if let record = removing { library.remove(record.id) }; removing = nil }
+        }
+    }
+
+    private func notice(_ title: String, message: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label(title, systemImage: icon).font(.subheadline.weight(.semibold))
+            Text(message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            .background(panel, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func downloadCard(_ record: DownloadRecord) -> some View {
+        let completed = record.state == "ready"
+        let needsRetry = ["failed", "expired"].contains(record.state)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Button { engine.play(record.video) } label: {
+                    Thumbnail(video: record.video)
+                        .frame(width: 112, height: 72).overlay {
+                            if completed { Image(systemName: "play.fill").font(.title3).foregroundStyle(.white).padding(10).background(.black.opacity(0.6), in: Circle()) }
+                        }.clipShape(RoundedRectangle(cornerRadius: 10))
+                }.buttonStyle(.plain).disabled(!completed)
+                    .accessibilityLabel("Play offline \(record.video.title)").accessibilityIdentifier(completed ? "offline-\(record.id)" : "download-thumbnail-\(record.id)")
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(record.video.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                    if !record.video.channel.isEmpty { Text(record.video.channel).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    if record.automatic { Text("Automatic download").font(.caption2).foregroundStyle(.secondary) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Menu {
+                    if needsRetry { Button("Retry download", systemImage: "arrow.clockwise") { library.download(record.video) } }
+                    Button(completed || needsRetry ? "Remove download" : "Cancel download", systemImage: "trash", role: .destructive) { removing = record }
+                } label: { Image(systemName: "ellipsis").frame(width: 32, height: 44) }
+                    .accessibilityLabel("Download options for \(record.video.title)")
+            }
+            HStack(spacing: 8) {
+                if completed {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                } else if needsRetry {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                } else { ProgressView().controlSize(.small) }
+                Text(record.statusText).font(.caption.weight(.medium)).frame(maxWidth: .infinity, alignment: .leading)
+                if needsRetry { Button("Retry") { library.download(record.video) }.font(.caption.bold()).buttonStyle(.bordered) }
+            }
+            if record.state == "downloading" {
+                ProgressView(value: record.progress).tint(accent)
+                    .accessibilityLabel("Download progress").accessibilityValue("\(Int(record.progress * 100)) percent")
+            }
+            if let error = record.error { Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+        }.padding(14).background(panel, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+}
+
+extension DownloadRecord {
+    var statusText: String {
+        switch state {
+        case "ready": return "Available offline · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         case "requesting": return "Requesting download…"
-        case "queued": return "Queued on companion"
-        case "preparing": return "Preparing video on companion"
-        case "waiting": return "Waiting to transfer"
-        case "downloading": return "Downloading · \(Int(record.progress * 100))%"
-        case "expired": return "Server copy expired · tap Retry"
-        default: return "Download needs attention"
+        case "queued": return "Queued · waiting to prepare"
+        case "preparing": return "Preparing video…"
+        case "waiting": return "Waiting to transfer…"
+        case "waitingForNetwork": return "Waiting for a connection…"
+        case "downloading": return progress > 0 ? "Downloading · \(Int(progress * 100))%" : "Starting download…"
+        case "expired": return "Download expired"
+        default: return "Download failed"
         }
     }
 }

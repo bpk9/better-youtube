@@ -159,7 +159,6 @@ final class BetterYouTubeUITests: XCTestCase {
             XCTAssertFalse(app.staticTexts["Bring your YouTube along"].exists)
             XCTAssertFalse(app.buttons["Close player"].exists)
             XCTAssertFalse(app.buttons["Dismiss player"].exists)
-            saveCurrentVideo(app)
             attach(app, "Video detail with top-left Back")
             app.buttons[returnControl].tap()
             XCTAssertFalse(back.exists)
@@ -168,12 +167,13 @@ final class BetterYouTubeUITests: XCTestCase {
             XCTAssertTrue(app.buttons[selectedID].exists, "Return should preserve the existing feed")
         }
         app.buttons["tab-Library"].tap()
+        app.segmentedControls.buttons["History"].tap()
         app.buttons[selectedID].tap()
         XCTAssertTrue(app.buttons["backToFeed"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["Your collection"].exists)
+        XCTAssertFalse(app.staticTexts["Your library"].exists)
         app.buttons["tab-Library"].tap()
         XCTAssertFalse(app.buttons["backToFeed"].exists)
-        XCTAssertTrue(app.staticTexts["Your collection"].exists)
+        XCTAssertTrue(app.staticTexts["Your library"].exists)
         attach(app, "Library restored by tapping selected tab")
     }
 
@@ -334,6 +334,23 @@ final class BetterYouTubeUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Finding your next watch…"].exists)
     }
 
+    @MainActor func testLibraryDownloadsAndSettings() throws {
+        let app = XCUIApplication(); app.launch()
+        app.buttons["tab-Library"].tap()
+        XCTAssertTrue(app.segmentedControls.buttons["Downloads"].isSelected)
+        XCTAssertFalse(app.segmentedControls.buttons["Saved"].exists)
+        XCTAssertTrue(app.buttons["openDownloads"].exists)
+        attach(app, "Downloads library")
+        app.buttons["openDownloads"].tap()
+        XCTAssertTrue(app.switches["Download on Wi-Fi only"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.navigationBars["Download settings"].exists)
+        app.buttons["Done"].tap()
+        app.segmentedControls.buttons["History"].tap()
+        XCTAssertFalse(app.buttons["openDownloads"].exists)
+        app.segmentedControls.buttons["Downloads"].tap()
+        XCTAssertTrue(app.buttons["openDownloads"].exists)
+    }
+
     @MainActor func testOfflineDownloadAndLocalPlayback() throws {
         let app = XCUIApplication(); app.launch()
         app.buttons["Search"].tap()
@@ -343,14 +360,15 @@ final class BetterYouTubeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["videoActions"].waitForExistence(timeout: 10))
         app.buttons["videoActions"].tap()
         app.buttons["Download current video"].tap()
+        XCTAssertTrue(app.buttons["View downloads"].waitForExistence(timeout: 3))
+        app.buttons["View downloads"].tap()
         let offline = app.buttons["offline-aqz-KE-bpKQ"]
         XCTAssertTrue(offline.waitForExistence(timeout: 55), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["Companion connected"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Available offline"].exists)
         attach(app, "Offline download ready")
         app.terminate()
         app.launch()
         app.buttons["tab-Library"].tap()
-        app.buttons["openDownloads"].tap()
         XCTAssertTrue(offline.waitForExistence(timeout: 10), "Downloaded file must survive relaunch")
         offline.tap()
         XCTAssertTrue(app.staticTexts["Downloaded · available offline"].waitForExistence(timeout: 5))
@@ -372,7 +390,7 @@ final class BetterYouTubeUITests: XCTestCase {
         app.buttons["backToFeed"].tap()
     }
 
-    @MainActor func testLiveSearchPlaybackAndSavedVideo() throws {
+    @MainActor func testLiveSearchPlaybackAndHistory() throws {
         let app = XCUIApplication()
         app.launch()
         XCTAssertTrue(app.buttons["Search"].waitForExistence(timeout: 10))
@@ -394,21 +412,34 @@ final class BetterYouTubeUITests: XCTestCase {
         expectation(for: advance, evaluatedWith: nil)
         waitForExpectations(timeout: 10)
         attach(app, "Live playback")
-        if !app.buttons["videoOverlayPlayPause"].exists { app.buttons["videoSurface"].tap() }; app.buttons["videoOverlayPlayPause"].tap()
+        let native = app.otherElements["nativeVideoSurface"].exists
+        if native { setNativePlayback(app, playing: false) }
+        else {
+            if !app.buttons["videoOverlayPlayPause"].exists { app.buttons["videoSurface"].tap() }
+            app.buttons["videoOverlayPlayPause"].tap()
+        }
         expectation(for: NSPredicate(format: "label BEGINSWITH 'Paused'"), evaluatedWith: status)
         waitForExpectations(timeout: 5)
         let restarted = expectation(for: playing, evaluatedWith: status)
         restarted.isInverted = true
         wait(for: [restarted], timeout: 4)
-        if !app.buttons["videoOverlayPlayPause"].exists { app.buttons["videoSurface"].tap() }; app.buttons["videoOverlayPlayPause"].tap()
+        if native { setNativePlayback(app, playing: true) }
+        else {
+            if !app.buttons["videoOverlayPlayPause"].exists { app.buttons["videoSurface"].tap() }
+            app.buttons["videoOverlayPlayPause"].tap()
+        }
         expectation(for: playing, evaluatedWith: status)
         waitForExpectations(timeout: 10)
-        saveCurrentVideo(app)
+        if native { setNativePlayback(app, playing: false) }
+        app.buttons["videoActions"].tap()
+        XCTAssertFalse(app.buttons["Save current video"].exists)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
         app.buttons["tab-Library"].tap()
         XCTAssertFalse(app.buttons["backToFeed"].exists, "Changing tabs must dismiss the pinned player")
         XCTAssertFalse(app.staticTexts["playbackStatus"].exists)
+        app.segmentedControls.buttons["History"].tap()
         XCTAssertTrue(card.waitForExistence(timeout: 5))
-        attach(app, "Saved library")
+        attach(app, "Watch history")
     }
 
     @MainActor func testPlayerDoesNotFollowTabNavigation() throws {
@@ -423,8 +454,8 @@ final class BetterYouTubeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Expand player"].exists)
         XCTAssertFalse(app.staticTexts["playbackStatus"].exists)
         app.buttons["tab-Library"].tap()
-        XCTAssertTrue(app.staticTexts["Your collection"].exists)
-        XCTAssertLessThan(app.staticTexts["Your collection"].frame.minY, 300, "Library should get the screen space back")
+        XCTAssertTrue(app.staticTexts["Your library"].exists)
+        XCTAssertLessThan(app.staticTexts["Your library"].frame.minY, 300, "Library should get the screen space back")
         attach(app, "Library without pinned player")
         app.buttons["tab-Home"].tap()
         XCTAssertFalse(app.buttons["backToFeed"].exists, "Returning Home must not resurrect the dismissed player")
@@ -440,13 +471,7 @@ final class BetterYouTubeUITests: XCTestCase {
         attach(app, "Settings")
         app.buttons["Done"].tap()
         app.buttons["tab-Library"].tap()
-        XCTAssertTrue(app.staticTexts["Your collection"].exists)
-    }
-
-    @MainActor private func saveCurrentVideo(_ app: XCUIApplication) {
-        app.buttons["videoActions"].tap()
-        if app.buttons["Save current video"].waitForExistence(timeout: 1) { app.buttons["Save current video"].tap() }
-        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap() }
+        XCTAssertTrue(app.staticTexts["Your library"].exists)
     }
 
     @MainActor private func setNativePlayback(_ app: XCUIApplication, playing: Bool) {

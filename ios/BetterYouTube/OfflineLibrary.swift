@@ -134,7 +134,7 @@ class PinnedSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendab
         Task {
             let tasks = await transfers.allTasks
             activeIDs = Set(tasks.compactMap(\.taskDescription))
-            for i in records.indices where records[i].state == "downloading" && !activeIDs.contains(records[i].id) {
+            for i in records.indices where ["downloading", "waitingForNetwork"].contains(records[i].state) && !activeIDs.contains(records[i].id) {
                 records[i].state = FileManager.default.fileExists(atPath: Self.file(records[i].id).path) ? "ready" : "waiting"
             }
             persist()
@@ -163,9 +163,10 @@ class PinnedSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendab
         return data
     }
     func download(_ video: Video) {
-        guard localURL(video.id) == nil else { return }
+        guard localURL(video.id) == nil, !activeIDs.contains(video.id),
+              record(video.id).map({ ["failed", "expired"].contains($0.state) }) ?? true else { return }
         ignored.remove(video.id); UserDefaults.standard.set(Array(ignored), forKey: "ignoredDownloads")
-        if let i = records.firstIndex(where: { $0.id == video.id }) { records[i].state = "requesting"; records[i].error = nil }
+        if let i = records.firstIndex(where: { $0.id == video.id }) { records[i].state = "requesting"; records[i].progress = 0; records[i].error = nil }
         else { records.insert(DownloadRecord(video: video, state: "requesting"), at: 0) }
         persist()
         Task {
@@ -218,7 +219,12 @@ class PinnedSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendab
     }
     func progress(_ id: String, written: Int64, expected: Int64) {
         guard let i = records.firstIndex(where: { $0.id == id }) else { return }
+        records[i].state = "downloading"
         records[i].progress = expected > 0 ? min(1, Double(written) / Double(expected)) : 0
+    }
+    func waitingForNetwork(_ id: String) {
+        guard activeIDs.contains(id), let i = records.firstIndex(where: { $0.id == id }) else { return }
+        records[i].state = "waitingForNetwork"
     }
     func finished(_ id: String, size: Int64) {
         activeIDs.remove(id)
@@ -278,6 +284,10 @@ class PinnedSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendab
 
 final class TransferDelegate: PinnedSessionDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
     @MainActor weak var owner: OfflineLibrary?
+    func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) {
+        guard let id = task.taskDescription else { return }
+        Task { @MainActor in owner?.waitingForNetwork(id) }
+    }
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         guard let id = downloadTask.taskDescription else { return }
         Task { @MainActor in owner?.progress(id, written: totalBytesWritten, expected: totalBytesExpectedToWrite) }

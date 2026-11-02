@@ -36,7 +36,6 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
 
 @MainActor final class YouTubeEngine: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, AVPlayerViewControllerDelegate {
     @Published var videos: [Video] = []
-    @Published var saved: [Video] = []
     @Published var history: [Video] = []
     @Published var current: Video?
     @Published var tab: FeedTab = .home
@@ -141,7 +140,7 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         }
         feedWeb = web(); playerWeb = web()
         super.init()
-        saved = readVideos("saved"); history = readVideos("history")
+        history = readVideos("history")
         for web in [feedWeb, playerWeb] {
             web.navigationDelegate = self; web.uiDelegate = self
             web.configuration.userContentController.add(WeakScriptHandler(self), name: "betterYouTube")
@@ -475,10 +474,6 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         playerWeb.evaluateJavaScript("window.BetterYouTube?.pip()") { [weak self] result, _ in
             if result as? Bool != true { self?.playerMessage = "Start the video, then try Picture in Picture again. Some videos don’t support it." }
         }
-    }
-    func toggleSaved(_ video: Video) {
-        if saved.contains(where: { $0.id == video.id }) { saved.removeAll { $0.id == video.id } } else { saved.insert(video, at: 0) }
-        persist(saved, "saved")
     }
     func clearHistory() { history = []; persist(history, "history") }
 

@@ -15,7 +15,7 @@ scripts/                   Local setup, builds, and validation
 
 ## Features
 
-- Discovery, search, subscriptions, saved videos, and local watch history.
+- Discovery, search, subscriptions, an offline download library, and local watch history.
 - Google sign-in through the system authentication browser. Sign-in is remembered securely on the device; no account email is hardcoded.
 - One-tap playback, fullscreen, Picture in Picture, AirPlay, captions/language selection, and playback speeds from 0.25× to 2×.
 - Native playback for compatible streams and downloaded files, with web playback as fallback.

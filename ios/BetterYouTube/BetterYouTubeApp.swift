@@ -1,8 +1,8 @@
 import SwiftUI
 
-private let canvas = Color(red: 0.035, green: 0.043, blue: 0.055)
-private let panel = Color(red: 0.075, green: 0.086, blue: 0.105)
-private let accent = Color(red: 1, green: 0.29, blue: 0.22)
+let canvas = Color(red: 0.035, green: 0.043, blue: 0.055)
+let panel = Color(red: 0.075, green: 0.086, blue: 0.105)
+let accent = Color(red: 1, green: 0.29, blue: 0.22)
 
 @main struct BetterYouTubeApp: App {
     @UIApplicationDelegateAdaptor(ApplicationDelegate.self) private var delegate
@@ -59,7 +59,7 @@ struct ContentView: View {
         .background(engine.fullScreen ? Color.black : canvas)
         .sheet(isPresented: $showSettings) { settings }
         .sheet(isPresented: $showAccount) { accountSheet }
-        .sheet(isPresented: $showDownloads) { DownloadsView(engine: engine) }
+        .sheet(isPresented: $showDownloads) { DownloadsView() }
         .onChange(of: engine.fullScreen) { _, _ in searchFocused = false }
         .onChange(of: engine.tab) { _, _ in searchFocused = false }
         .onChange(of: account.signedIn) { _, _ in
@@ -108,19 +108,24 @@ struct ContentView: View {
     private var nativeFeed: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                if showingVideoDetail {
-                    videoList(engine.tab == .library ? (librarySegment == 0 ? engine.saved : engine.history) : engine.videos)
-                } else if engine.tab == .library {
-                    sectionHeading("Your collection", subtitle: "A little less scrolling. A little more you.")
-                    Button { showDownloads = true } label: {
-                        HStack { Label("Downloads & automatic saves", systemImage: "arrow.down.circle.fill"); Spacer(); Text("\(offline.records.filter { $0.state == "ready" }.count)"); Image(systemName: "chevron.right") }.font(.subheadline.weight(.semibold)).padding(18).background(panel, in: RoundedRectangle(cornerRadius: 16))
-                    }.buttonStyle(.plain).accessibilityIdentifier("openDownloads")
-                    Picker("Collection", selection: $librarySegment) { Text("Saved").tag(0); Text("History").tag(1) }.pickerStyle(.segmented)
-                    let items = librarySegment == 0 ? engine.saved : engine.history
-                    if items.isEmpty {
-                        emptyState(icon: librarySegment == 0 ? "bookmark" : "clock", title: librarySegment == 0 ? "Keep the good stuff" : "Pick up where you left off", text: librarySegment == 0 ? "Save a video from its menu or the player. It’ll be here whenever you’re ready." : "Videos you open will appear here, saved only on this iPhone.")
+                if engine.tab == .library {
+                    if !showingVideoDetail {
+                        sectionHeading("Your library", subtitle: "Ready for wherever you watch.")
+                        Picker("Collection", selection: $librarySegment) {
+                            Text("Downloads").tag(0)
+                            Text("History").tag(1)
+                        }.pickerStyle(.segmented)
                     }
-                    videoList(items)
+                    if librarySegment == 0 {
+                        DownloadLibraryView(engine: engine, openSettings: { showDownloads = true })
+                    } else {
+                        if engine.history.isEmpty {
+                            emptyState(icon: "clock", title: "Pick up where you left off", text: "Videos you open will appear here, saved only on this iPhone.")
+                        }
+                        videoList(engine.history)
+                    }
+                } else if showingVideoDetail {
+                    videoList(engine.videos)
                 } else if engine.tab == .subscriptions && !account.signedIn {
                     sectionHeading("Your subscriptions", subtitle: "Your channels will appear here after you sign in.")
                     emptyState(icon: "person.crop.circle", title: "Please sign in", text: "Connect your Google account to see the channels you subscribe to on YouTube.")
@@ -152,8 +157,12 @@ struct ContentView: View {
                 }
             }.padding(18)
         }
-        .refreshable { if engine.tab != .library { engine.refresh() } }
+        .refreshable { if engine.tab == .library { await offline.sync() } else { engine.refresh() } }
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    private func startDownload(_ video: Video) {
+        offline.download(video)
     }
 
     private func sectionHeading(_ title: String, subtitle: String) -> some View {
@@ -195,11 +204,10 @@ struct ContentView: View {
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }.buttonStyle(.plain)
                         Menu {
-                            Button { offline.download(video); showDownloads = true } label: { Label(offline.localURL(video.id) == nil ? "Download for offline" : "Downloaded", systemImage: "arrow.down.circle") }
+                            Button { startDownload(video) } label: { Label(offline.localURL(video.id) == nil ? "Download for offline" : "Downloaded", systemImage: "arrow.down.circle") }
                             if let channelID = video.channelID {
                                 Button { Task { await offline.setRule(ChannelRule(id: channelID, title: video.channel, enabled: true)) }; showDownloads = true } label: { Label("Auto-download this channel", systemImage: "arrow.triangle.2.circlepath") }
                             }
-                            Button { engine.toggleSaved(video) } label: { Label(engine.saved.contains(where: { $0.id == video.id }) ? "Remove from saved" : "Save for later", systemImage: "bookmark") }
                             ShareLink(item: video.url)
                         } label: { Image(systemName: "ellipsis").rotationEffect(.degrees(90)).frame(width: 20, height: 30).foregroundStyle(.secondary) }.accessibilityLabel("Video options")
                     }
@@ -240,8 +248,7 @@ struct ContentView: View {
                         HStack(alignment: .top) {
                             Text(video.title).font(.subheadline.weight(.semibold)).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                             Menu {
-                                Button { engine.toggleSaved(video) } label: { Label(engine.saved.contains(where: { $0.id == video.id }) ? "Remove current video from saved" : "Save current video", systemImage: "bookmark") }
-                                Button { offline.download(video); showDownloads = true } label: { Label("Download current video", systemImage: "arrow.down.circle") }
+                                Button { startDownload(video) } label: { Label("Download current video", systemImage: "arrow.down.circle") }
                                 ShareLink(item: video.url)
                             } label: { Image(systemName: "ellipsis").frame(width: 36, height: 28) }
                                 .accessibilityLabel("Video actions").accessibilityIdentifier("videoActions")
@@ -252,6 +259,17 @@ struct ContentView: View {
                             Spacer()
                             Text("\(time(engine.elapsed)) / \(time(engine.duration))").monospacedDigit().accessibilityIdentifier("playbackTime")
                         }.font(.system(size: 10)).foregroundStyle(.secondary)
+                        if let record = offline.record(video.id) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 8) {
+                                    if !["ready", "failed", "expired"].contains(record.state) { ProgressView().controlSize(.small) }
+                                    Text(record.statusText).font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("View downloads") { librarySegment = 0; engine.tapTab(.library) }.font(.caption.weight(.semibold))
+                                }
+                                if record.state == "downloading" { ProgressView(value: record.progress).tint(accent) }
+                            }
+                        }
                         if let message = engine.playerMessage, message != "Loading video…", !message.hasPrefix("Using the web player") { Text(message).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                     }.padding(.horizontal, 18).padding(.vertical, 12).background(panel)
 
@@ -289,7 +307,7 @@ struct ContentView: View {
                 }
                 Section("Your YouTube") {
                     Button { showSettings = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showAccount = true } } label: { Label("Sign in / manage account", systemImage: "person.crop.circle") }
-                    Button { showSettings = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showDownloads = true } } label: { Label("Downloads & automatic saves", systemImage: "arrow.down.circle") }
+                    Button { showSettings = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showDownloads = true } } label: { Label("Download settings", systemImage: "arrow.down.circle") }
                 }
                 Section {
                     Toggle("Block ads", isOn: $engine.blockAds).onChange(of: engine.blockAds) { _, _ in engine.applySettings() }
@@ -301,7 +319,7 @@ struct ContentView: View {
                     Toggle("Background playback", isOn: $engine.backgroundAudio).onChange(of: engine.backgroundAudio) { _, _ in engine.applySettings() }
                 } header: { Text("Keep listening") } footer: { Text("Native playback supports background audio and lock-screen controls. When a video uses the web player, try Picture in Picture before leaving the app. Background playback is experimental and may vary by video.") }
                 Section("On this iPhone") {
-                    LabeledContent("Saved videos", value: String(engine.saved.count))
+                    LabeledContent("Downloaded videos", value: String(offline.records.filter { $0.state == "ready" }.count))
                     Button("Clear watch history", role: .destructive) { engine.clearHistory() }
                     Text("History and offline videos stay on this iPhone. Google tokens stay in its Keychain. The companion receives video IDs and channel rules; it does not receive your Google login.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -460,7 +478,7 @@ private struct PlaybackSettingsMenu: View, Equatable {
     private func speedLabel(_ speed: Double) -> String { speed == 1 ? "1× (Normal)" : "\(speed.formatted(.number.precision(.fractionLength(0...2))))×" }
 }
 
-private struct Thumbnail: View {
+struct Thumbnail: View {
     let video: Video
     var body: some View {
         GeometryReader { geometry in
