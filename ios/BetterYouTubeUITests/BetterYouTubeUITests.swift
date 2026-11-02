@@ -1,6 +1,24 @@
 import XCTest
 
 final class BetterYouTubeUITests: XCTestCase {
+    @MainActor func testUnsubscribeWithReadOnlyGoogleShowsPermissionPrompt() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--subscription-permission-test"]
+        app.launch()
+        app.buttons["YouTube account"].tap()
+        let unsubscribe = app.buttons["Unsubscribe from Example Channel"]
+        XCTAssertTrue(unsubscribe.waitForExistence(timeout: 5))
+        unsubscribe.tap()
+        let prompt = app.alerts["Allow subscription changes"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5), "An unsubscribe tap inside the account sheet must not silently do nothing")
+        XCTAssertTrue(prompt.buttons["Connect Google"].exists)
+        XCTAssertTrue(prompt.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "unsubscribe from Example Channel")).firstMatch.exists)
+        prompt.buttons["Cancel"].tap()
+        XCTAssertTrue(unsubscribe.exists, "Cancel must leave the subscription unchanged")
+        unsubscribe.tap()
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5), "Permission prompting must work on repeated attempts")
+    }
+
     @MainActor func testPlaybackSpeedAndCaptions() throws {
         let app = XCUIApplication(); app.launchArguments = ["--playback-diagnostics"]; app.launch()
         app.buttons["Search"].tap()

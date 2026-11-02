@@ -50,9 +50,9 @@ Create a Google Cloud project, enable **YouTube Data API v3**, configure the con
 python3 scripts/configure-google.py --client-id YOUR_IOS_CLIENT_ID
 ```
 
-Rebuild the app, open its account screen, and select **Sign in with Google**. This requests the read-only YouTube scope. The callback is derived from your client ID; the setup script configures it without editing shared project files. There is no client secret in the app.
+Rebuild the app, open its account screen, and select **Sign in with Google**. This requests the YouTube `youtube.force-ssl` scope to read and manage subscriptions. Existing read-only connections are prompted to reconnect when subscribing or unsubscribing; the requested change finishes after Google access is granted. You can also use **Allow subscription changes** on the account screen. The callback is derived from your client ID; the setup script configures it without editing shared project files. There is no client secret in the app.
 
-Google sign-in imports subscriptions. It does not sign the embedded website into YouTube or provide a personalized Home recommendation API. Google projects in testing mode can require periodic reauthorization.
+Google sign-in imports subscriptions. Use a video’s options menu to subscribe or unsubscribe, or unsubscribe from the channel list on the account screen. These changes sync to your YouTube account; automatic download rules remain independently controlled. It does not sign the embedded website into YouTube or provide a personalized Home recommendation API. Google projects in testing mode can require periodic reauthorization.
 
 ## Optional companion server
 

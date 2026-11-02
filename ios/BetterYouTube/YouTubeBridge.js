@@ -35,6 +35,16 @@
     const prior = cards.get(id);
     cards.set(id, { id, title, channel: channel || prior?.channel || '', detail: detail || prior?.detail || '', duration: duration || prior?.duration || '', channelID: channelID || prior?.channelID || null });
   }
+  function channelID(value, depth = 0) {
+    if (!value || typeof value !== 'object' || depth > 15) return null;
+    const id = value.browseEndpoint?.browseId;
+    if (/^UC[A-Za-z0-9_-]{22}$/.test(id || '')) return id;
+    for (const child of Object.values(value)) {
+      const found = channelID(child, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
   function walk(value, depth = 0) {
     if (!value || typeof value !== 'object' || depth > 65) return;
     if (value.adSlotRenderer || value.promotedSparklesWebRenderer || value.promotedVideoRenderer) return;
@@ -48,7 +58,7 @@
       const badges = l.contentImage?.thumbnailViewModel?.overlays || [];
       let duration = '';
       for (const b of badges) for (const badge of b.thumbnailOverlayBadgeViewModel?.thumbnailBadges || []) duration = badge.thumbnailBadgeViewModel?.text || duration;
-      card(l.contentId, asText(meta?.title), parts[0] || '', parts.slice(1).join(' · '), duration);
+      card(l.contentId, asText(meta?.title), parts[0] || '', parts.slice(1).join(' · '), duration, channelID(meta));
     }
     for (const [k, child] of Object.entries(value)) if (!adKeys.has(k)) walk(child, depth + 1);
   }
@@ -60,7 +70,9 @@
       const title = container.querySelector('h3, h4, #video-title, .yt-lockup-metadata-view-model__title')?.textContent?.trim() || a.getAttribute('title');
       const channel = container.querySelector('.ytm-badge-and-byline-item-byline, .yt-content-metadata-view-model__metadata-text, #channel-name')?.textContent?.trim();
       const duration = container.querySelector('ytm-thumbnail-overlay-time-status-renderer, .yt-badge-shape__text')?.textContent?.trim();
-      if (!cards.has(id)) card(id, title, channel, '', duration);
+      const channelLink = container.querySelector('a[href*="/channel/UC"]')?.getAttribute('href');
+      const channelId = channelLink?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})(?:[/?#]|$)/)?.[1];
+      if (!cards.has(id) || (!cards.get(id).channelID && channelId)) card(id, title || cards.get(id)?.title, channel, '', duration, channelId);
     }
   }
   function collect() {

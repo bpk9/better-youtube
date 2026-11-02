@@ -17,13 +17,14 @@ const { context, messages } = environment();
 context.ytInitialData = { contents: [
   { videoRenderer: { videoId: 'abcdefghijk', title: { runs: [{ text: 'Real video' }] }, ownerText: { simpleText: 'A creator' }, lengthText: { simpleText: '4:32' } } },
   { adSlotRenderer: { videoRenderer: { videoId: 'adadadadada', title: { simpleText: 'Advertisement' } } } },
-  { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', contentId: 'ZYXWVUTSRQP', metadata: { lockupMetadataViewModel: { title: { content: 'Modern card' } } } } },
+  { lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', contentId: 'ZYXWVUTSRQP', metadata: { lockupMetadataViewModel: { title: { content: 'Modern card' }, metadata: { contentMetadataViewModel: { metadataRows: [{ metadataParts: [{ text: { content: 'Modern creator', commandRuns: [{ onTap: { innertubeCommand: { browseEndpoint: { browseId: 'UCabcdefghijklmnopqrstuv' } } } }] } }] }] } } } } } },
   { videoRenderer: { videoId: '../invalid', title: { simpleText: 'Invalid ID' } } }
 ] };
 context.BetterYouTube.collect();
 assert.equal(messages.at(-1).cards.length, 2);
 assert.equal(messages.at(-1).cards[0].channel, 'A creator');
 assert.equal(messages.at(-1).cards[1].title, 'Modern card');
+assert.equal(messages.at(-1).cards[1].channelID, 'UCabcdefghijklmnopqrstuv', 'modern cards expose channel IDs for subscription actions');
 const parsed = vm.runInContext('JSON.parse(\'{"streamingData":{"url":"kept"},"adPlacements":[1],"nested":{"playerAds":[1]}}\')', context);
 assert.equal(parsed.streamingData.url, 'kept');
 assert.equal(parsed.adPlacements, undefined);

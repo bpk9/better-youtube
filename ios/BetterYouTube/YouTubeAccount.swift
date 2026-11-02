@@ -9,6 +9,10 @@ import Security
     @Published var busy = false
     @Published var error: String?
     @Published var signedIn = false
+    @Published var updatingSubscriptions = false
+    @Published var canManageSubscriptions = SecureStore.read("google-scopes")?.components(separatedBy: " ").contains("https://www.googleapis.com/auth/youtube.force-ssl") == true
+    private var refreshingSubscriptions = false
+    private var accountRevision = 0
     private var session: ASWebAuthenticationSession?
     private var accessToken: String?
     private var expiresAt = Date.distantPast
@@ -21,6 +25,14 @@ import Security
     var configured: Bool { clientID != nil }
     override init() {
         super.init()
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--subscription-permission-test") {
+            signedIn = true
+            canManageSubscriptions = false
+            subscriptions = [ChannelRule(id: "UCabcdefghijklmnopqrstuv", title: "Example Channel")]
+            return
+        }
+        #endif
         signedIn = SecureStore.read("google-refresh") != nil
         if let data = UserDefaults.standard.data(forKey: "googleSubscriptions"), let list = try? JSONDecoder().decode([ChannelRule].self, from: data) { subscriptions = list }
     }
@@ -29,15 +41,15 @@ import Security
     }
     private func random() -> String { var data = Data(count: 32); _ = data.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }; return base64(data) }
     private func base64(_ data: Data) -> String { data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") }
-    func signIn() {
+    func signIn(onAuthorized: (() async -> Void)? = nil) {
         guard let clientID else { error = "Google sign-in needs a one-time app registration. The app’s iOS client ID hasn’t been configured yet."; return }
-        guard !busy else { return }
+        guard !busy, !updatingSubscriptions else { return }
         let scheme = clientID.components(separatedBy: ".").reversed().joined(separator: ".")
         let redirect = scheme + ":/oauthredirect"
         let state = random(), verifier = random()
         let challenge = base64(Data(SHA256.hash(data: Data(verifier.utf8))))
         var url = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
-        url.queryItems = ["client_id": clientID, "redirect_uri": redirect, "response_type": "code", "scope": "https://www.googleapis.com/auth/youtube.readonly", "code_challenge": challenge, "code_challenge_method": "S256", "state": state, "access_type": "offline", "prompt": "consent"].map { URLQueryItem(name: $0.key, value: $0.value) }
+        url.queryItems = ["client_id": clientID, "redirect_uri": redirect, "response_type": "code", "scope": "https://www.googleapis.com/auth/youtube.force-ssl", "code_challenge": challenge, "code_challenge_method": "S256", "state": state, "access_type": "offline", "prompt": "consent"].map { URLQueryItem(name: $0.key, value: $0.value) }
         busy = true; error = nil
         session = ASWebAuthenticationSession(url: url.url!, callbackURLScheme: scheme) { [weak self] callback, failure in
             Task { @MainActor in
@@ -51,6 +63,8 @@ import Security
                     try await self.exchange(["client_id": clientID, "code": code, "code_verifier": verifier, "redirect_uri": redirect, "grant_type": "authorization_code"])
                     self.signedIn = true
                     await self.refreshSubscriptions()
+                    self.busy = false
+                    if let onAuthorized { await onAuthorized() }
                 } catch { self.error = error.localizedDescription }
             }
         }
@@ -69,11 +83,23 @@ import Security
         guard (response as? HTTPURLResponse)?.statusCode == 200, let token = object?["access_token"] as? String else {
             throw NSError(domain: "Google", code: 1, userInfo: [NSLocalizedDescriptionKey: object?["error_description"] as? String ?? "Google authorization failed. Sign in again."])
         }
+        // OAuth may omit scope when it exactly matches the authorization request.
+        let grantedScope = object?["scope"] as? String ?? (fields["grant_type"] == "authorization_code" ? "https://www.googleapis.com/auth/youtube.force-ssl" : nil)
+        if let scope = grantedScope {
+            SecureStore.save(scope, key: "google-scopes")
+            canManageSubscriptions = scope.components(separatedBy: " ").contains("https://www.googleapis.com/auth/youtube.force-ssl")
+        }
         accessToken = token; expiresAt = Date(timeIntervalSinceNow: (object?["expires_in"] as? Double ?? 3600) - 60)
         if let refresh = object?["refresh_token"] as? String { SecureStore.save(refresh, key: "google-refresh") }
     }
     func refreshSubscriptions() async {
-        guard let clientID else { return }
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--subscription-permission-test") { return }
+        #endif
+        guard let clientID, !refreshingSubscriptions, !updatingSubscriptions else { return }
+        refreshingSubscriptions = true
+        let revision = accountRevision
+        defer { refreshingSubscriptions = false }
         do {
             if accessToken == nil || expiresAt < Date() {
                 guard let refresh = SecureStore.read("google-refresh") else { return }
@@ -93,13 +119,85 @@ import Security
                     if let snippet = item["snippet"] as? [String: Any], let resource = snippet["resourceId"] as? [String: Any], let id = resource["channelId"] as? String, let title = snippet["title"] as? String { result.append(ChannelRule(id: id, title: title)) }
                 }
                 next = object["nextPageToken"] as? String
-            } while next != nil && result.count < 1000
+            } while next != nil
+            guard revision == accountRevision else { return }
             subscriptions = result; signedIn = true; error = nil
             UserDefaults.standard.set(try JSONEncoder().encode(result), forKey: "googleSubscriptions")
             if OfflineLibrary.shared.isConfigured { await OfflineLibrary.shared.importChannels(Array(result.prefix(100))) }
+        } catch { if revision == accountRevision { self.error = error.localizedDescription } }
+    }
+    func isSubscribed(to channelID: String) -> Bool {
+        subscriptions.contains { $0.id == channelID }
+    }
+
+    /// Look up the server subscription before changing it: deletion takes a
+    /// subscription resource ID, not the channel ID, and the cache may be stale.
+    func setSubscribed(_ subscribed: Bool, channel: ChannelRule) async {
+        guard !busy, !updatingSubscriptions else { return }
+        guard signedIn, canManageSubscriptions else {
+            error = "Google hasn’t granted permission to change subscriptions. Reconnect and allow YouTube access to continue."
+            return
+        }
+        updatingSubscriptions = true
+        accountRevision += 1 // Discard any older list request still in flight.
+        defer { updatingSubscriptions = false }
+        error = nil
+        do {
+            let existing = try await subscriptionRequest(query: [
+                URLQueryItem(name: "part", value: "id"),
+                URLQueryItem(name: "mine", value: "true"),
+                URLQueryItem(name: "forChannelId", value: channel.id)
+            ])
+            let id = (existing["items"] as? [[String: Any]])?.first?["id"] as? String
+            if subscribed && id == nil {
+                _ = try await subscriptionRequest(method: "POST", query: [URLQueryItem(name: "part", value: "snippet")], body: [
+                    "snippet": ["resourceId": ["kind": "youtube#channel", "channelId": channel.id]]
+                ])
+            } else if !subscribed, let id {
+                _ = try await subscriptionRequest(method: "DELETE", query: [URLQueryItem(name: "id", value: id)])
+            }
+            subscriptions.removeAll { $0.id == channel.id }
+            if subscribed { subscriptions.append(channel) }
+            UserDefaults.standard.set(try JSONEncoder().encode(subscriptions), forKey: "googleSubscriptions")
         } catch { self.error = error.localizedDescription }
     }
+
+    private func subscriptionRequest(method: String = "GET", query: [URLQueryItem], body: [String: Any]? = nil) async throws -> [String: Any] {
+        guard let clientID, let refresh = SecureStore.read("google-refresh") else {
+            throw NSError(domain: "Google", code: 1, userInfo: [NSLocalizedDescriptionKey: "Sign in with Google to manage subscriptions."])
+        }
+        if accessToken == nil || expiresAt < Date() {
+            try await exchange(["client_id": clientID, "refresh_token": refresh, "grant_type": "refresh_token"])
+        }
+        var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/subscriptions")!
+        components.queryItems = query
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = method
+        request.setValue("Bearer " + (accessToken ?? ""), forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        if method == "DELETE" && status == 404 { return [:] }
+        guard (200..<300).contains(status) else {
+            let details = object["error"] as? [String: Any]
+            let reasons = details?["errors"] as? [[String: Any]] ?? []
+            if reasons.contains(where: { $0["reason"] as? String == "insufficientPermissions" }) {
+                canManageSubscriptions = false
+                SecureStore.remove("google-scopes")
+            }
+            throw NSError(domain: "YouTube", code: status, userInfo: [NSLocalizedDescriptionKey: details?["message"] as? String ?? "YouTube couldn’t update your subscription. Please try again."])
+        }
+        return object
+    }
+
     func signOut() {
+        guard !updatingSubscriptions, !busy else { return }
+        accountRevision += 1
+        canManageSubscriptions = false; SecureStore.remove("google-scopes")
         session?.cancel(); accessToken = nil; SecureStore.remove("google-refresh"); signedIn = false; subscriptions = []
         UserDefaults.standard.removeObject(forKey: "googleSubscriptions")
     }

@@ -62,6 +62,9 @@ struct ContentView: View {
         .sheet(isPresented: $showDownloads) { DownloadsView() }
         .onChange(of: engine.fullScreen) { _, _ in searchFocused = false }
         .onChange(of: engine.tab) { _, _ in searchFocused = false }
+        .onChange(of: account.subscriptions.map(\.id)) { _, _ in
+            if engine.tab == .subscriptions { engine.selectTab(.subscriptions) }
+        }
         .onChange(of: account.signedIn) { _, _ in
             if engine.tab == .subscriptions { engine.selectTab(.subscriptions) }
         }
@@ -125,6 +128,9 @@ struct ContentView: View {
                         videoList(engine.history)
                     }
                 } else if showingVideoDetail {
+                    if let video = engine.current, let id = video.channelID {
+                        HStack { Text(video.channel).font(.headline); Spacer(); subscriptionButton(ChannelRule(id: id, title: video.channel)) }
+                    }
                     videoList(engine.videos)
                 } else if engine.tab == .subscriptions && !account.signedIn {
                     sectionHeading("Your subscriptions", subtitle: "Your channels will appear here after you sign in.")
@@ -206,6 +212,7 @@ struct ContentView: View {
                         Menu {
                             Button { startDownload(video) } label: { Label(offline.localURL(video.id) == nil ? "Download for offline" : "Downloaded", systemImage: "arrow.down.circle") }
                             if let channelID = video.channelID {
+                                subscriptionButton(ChannelRule(id: channelID, title: video.channel))
                                 Button { Task { await offline.setRule(ChannelRule(id: channelID, title: video.channel, enabled: true)) }; showDownloads = true } label: { Label("Auto-download this channel", systemImage: "arrow.triangle.2.circlepath") }
                             }
                             ShareLink(item: video.url)
@@ -215,6 +222,10 @@ struct ContentView: View {
             }
         }
     }
+    private func subscriptionButton(_ channel: ChannelRule) -> some View {
+        ChannelSubscriptionButton(channel: channel)
+    }
+
     private var loadingCards: some View {
         VStack(alignment: .leading, spacing: 12) {
             RoundedRectangle(cornerRadius: 17).fill(panel).aspectRatio(16 / 9, contentMode: .fit).overlay { ProgressView().tint(accent) }
@@ -335,11 +346,16 @@ struct ContentView: View {
                 Section {
                     Label(account.signedIn ? "YouTube connected" : "Your channels, in one place", systemImage: "person.crop.circle.fill").font(.headline)
                     Text(account.signedIn ? "Connected to Google" : "Not connected to Google").font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("accountConnectionStatus")
-                    Text("Connect Google to import your subscriptions. Choose which channels should download automatically.").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Connect Google to manage your YouTube subscriptions. Choose which channels should download automatically.").font(.subheadline).foregroundStyle(.secondary)
                     if account.signedIn {
                         LabeledContent("Subscriptions", value: String(account.subscriptions.count))
                         Button("Refresh subscriptions") { Task { await account.refreshSubscriptions(); engine.selectTab(.subscriptions) } }
-                        Button("Disconnect Google", role: .destructive) { account.signOut() }
+                        Button("Disconnect Google", role: .destructive) { account.signOut() }.disabled(account.updatingSubscriptions || account.busy)
+                        if !account.canManageSubscriptions {
+                            Text("Reconnect Google to allow subscribing and unsubscribing from channels.").font(.caption).foregroundStyle(.secondary)
+                            Button("Allow subscription changes") { account.signIn() }.disabled(account.busy || account.updatingSubscriptions)
+                        }
+                        if account.updatingSubscriptions || account.busy { ProgressView("Updating…") }
                     } else {
                         Button { account.signIn() } label: { Label("Sign in with Google", systemImage: "person.badge.key.fill") }.disabled(account.busy || !account.configured)
                         if account.busy { ProgressView("Connecting…") }
@@ -356,7 +372,7 @@ struct ContentView: View {
                 if !account.subscriptions.isEmpty {
                     Section("Subscriptions") {
                         ForEach(account.subscriptions) { channel in
-                            HStack { Text(channel.title); Spacer(); Button { Task { await offline.setRule(ChannelRule(id: channel.id, title: channel.title, enabled: true)) }; showAccount = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showDownloads = true } } label: { Image(systemName: "arrow.down.circle") }.accessibilityLabel("Auto-download \(channel.title)") }
+                            HStack { Text(channel.title); Spacer(); Button { Task { await offline.setRule(ChannelRule(id: channel.id, title: channel.title, enabled: true)) }; showAccount = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showDownloads = true } } label: { Image(systemName: "arrow.down.circle") }.accessibilityLabel("Auto-download \(channel.title)").buttonStyle(.borderless); subscriptionButton(channel).buttonStyle(.borderless) }
                         }
                     }
                 }
@@ -364,6 +380,67 @@ struct ContentView: View {
             .navigationTitle("YouTube account").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showAccount = false; if account.signedIn { engine.selectTab(.subscriptions) } } } }
         }
+    }
+}
+
+// Each button owns its presentation so permission and error alerts work both
+// in the feed and inside the already-presented account sheet.
+private struct ChannelSubscriptionButton: View {
+    let channel: ChannelRule
+    @ObservedObject private var account = YouTubeAccount.shared
+    @State private var notice: Notice?
+    @State private var requestedSubscription = false
+    @State private var awaitingAuthorization = false
+
+    private enum Notice: Identifiable {
+        case permission, failure(String)
+        var id: String { switch self { case .permission: return "permission"; case .failure: return "failure" } }
+    }
+
+    var body: some View {
+        let subscribed = account.isSubscribed(to: channel.id)
+        Button {
+            requestedSubscription = !subscribed
+            if !account.signedIn || !account.canManageSubscriptions {
+                notice = .permission
+            } else {
+                Task { await changeSubscription() }
+            }
+        } label: {
+            Label(subscribed ? "Unsubscribe" : "Subscribe", systemImage: subscribed ? "person.badge.minus" : "person.badge.plus")
+        }
+        .disabled(account.updatingSubscriptions || account.busy)
+        .accessibilityLabel("\(subscribed ? "Unsubscribe from" : "Subscribe to") \(channel.title)")
+        .alert(item: $notice) { item in
+            switch item {
+            case .permission:
+                return Alert(
+                    title: Text("Allow subscription changes"),
+                    message: Text("Reconnect Google to \(requestedSubscription ? "subscribe to" : "unsubscribe from") \(channel.title). Your current connection can only read subscriptions. After you grant access, we’ll finish this change."),
+                    primaryButton: .default(Text("Connect Google")) {
+                        awaitingAuthorization = true
+                        account.signIn { await changeSubscription() }
+                    },
+                    secondaryButton: .cancel()
+                )
+            case .failure(let message):
+                return Alert(title: Text("Subscription wasn’t changed"), message: Text(message), dismissButton: .default(Text("OK")))
+            }
+        }
+        .onChange(of: account.busy) { _, busy in
+            if !busy && awaitingAuthorization {
+                awaitingAuthorization = false
+                if let error = account.error { notice = .failure(error) }
+            }
+        }
+        .onChange(of: account.error) { _, error in
+            if awaitingAuthorization, let error { notice = .failure(error) }
+        }
+    }
+
+    @MainActor private func changeSubscription() async {
+        await account.setSubscribed(requestedSubscription, channel: channel)
+        if let error = account.error { notice = .failure(error) }
     }
 }
 
