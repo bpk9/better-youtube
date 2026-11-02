@@ -161,7 +161,10 @@ struct ContentView: View {
                         Button { engine.loadMore() } label: { Label("Load more videos", systemImage: "arrow.down").frame(maxWidth: .infinity) }.buttonStyle(.bordered).padding(.top, 5)
                     }
                 }
-            }.padding(18)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 4)
+            .padding(.bottom, 18)
         }
         .refreshable { if engine.tab == .library { await offline.sync() } else { engine.refresh() } }
         .scrollDismissesKeyboard(.interactively)
@@ -175,7 +178,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.system(size: 27, weight: .bold, design: .rounded)).tracking(-0.7)
             Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
-        }.padding(.top, 8)
+        }
     }
     private var topics: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -206,7 +209,7 @@ struct ContentView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(video.title).font(.system(size: 15, weight: .semibold)).lineLimit(2).foregroundStyle(.white)
                                 if !video.channel.isEmpty { Text(video.channel).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                                if !video.detail.isEmpty { Text(video.detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                                if !video.detail.isEmpty { Text(video.displayDetail).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }.buttonStyle(.plain)
                         Menu {

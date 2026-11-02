@@ -10,6 +10,31 @@ struct Video: Identifiable, Codable, Equatable {
     var detail: String = ""
     var duration: String = ""
     var channelID: String? = nil
+    var displayDetail: String { displayDetail(relativeTo: Date()) }
+    func displayDetail(relativeTo now: Date) -> String {
+        guard let date = Self.timestampParser.date(from: detail) ?? Self.fractionalTimestampParser.date(from: detail) else { return detail }
+        let age = now.timeIntervalSince(date)
+        guard age >= 0, age < 11 * 24 * 60 * 60 else {
+            return date.formatted(date: .abbreviated, time: .omitted)
+        }
+        let components: DateComponents
+        if age < 60 * 60 { components = DateComponents(minute: -max(1, Int(age / 60))) }
+        else if age < 24 * 60 * 60 { components = DateComponents(hour: -Int(age / (60 * 60))) }
+        else { components = DateComponents(day: -Int(age / (24 * 60 * 60))) }
+        return Self.relativeFormatter.localizedString(from: components)
+    }
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        formatter.dateTimeStyle = .numeric
+        return formatter
+    }()
+    private static let timestampParser = ISO8601DateFormatter()
+    private static let fractionalTimestampParser: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
     var thumbnail: URL? { URL(string: "https://i.ytimg.com/vi/\(id)/hqdefault.jpg") }
     var url: URL { URL(string: "https://www.youtube.com/watch?v=\(id)")! }
 }
