@@ -475,6 +475,7 @@ private struct WebVideoControls: View {
                         FullScreenButton(engine: engine)
                     }.font(.title3).foregroundStyle(.white)
                     Spacer()
+                    PlaybackScrubber(engine: engine)
                     if engine.fullScreen {
                         Text("\(Int(engine.elapsed) / 60):\(String(format: "%02d", Int(engine.elapsed) % 60))")
                             .font(.caption.monospacedDigit()).foregroundStyle(.white).accessibilityIdentifier("fullscreenTime")
@@ -493,6 +494,62 @@ private struct WebVideoControls: View {
                     .buttonStyle(.plain)
             }
         }.onChange(of: engine.current?.id) { _, _ in visible = false }
+    }
+}
+
+private struct PlaybackScrubber: View {
+    @ObservedObject var engine: YouTubeEngine
+    @State private var scrubbing = false
+    @State private var position = 0.0
+    @State private var pendingSeek: Double?
+
+    private var duration: Double { engine.duration.isFinite ? max(0, engine.duration) : 0 }
+    private var displayedPosition: Double {
+        let value = scrubbing ? position : (pendingSeek ?? engine.elapsed)
+        return value.isFinite ? min(max(0, value), duration) : 0
+    }
+
+    var body: some View {
+        Slider(value: Binding(
+            get: { displayedPosition },
+            set: { value in
+                position = value
+                // Accessibility adjustments commit without a drag gesture.
+                if !scrubbing { commitSeek(value) }
+            }
+        ), in: 0...max(duration, 1), onEditingChanged: { editing in
+            if editing { position = displayedPosition; pendingSeek = nil }
+            scrubbing = editing
+            if !editing { commitSeek(position) }
+        })
+        .tint(.white)
+        .disabled(duration <= 0)
+        .accessibilityLabel("Video progress")
+        .accessibilityIdentifier("videoScrubber")
+        .accessibilityValue("\(timestamp(displayedPosition)) of \(timestamp(duration))")
+        .frame(minHeight: 44)
+        .onChange(of: engine.elapsed) { _, elapsed in
+            // Keep the released thumb in place while old progress reports arrive.
+            if let target = pendingSeek, abs(elapsed - target) < 2 { pendingSeek = nil }
+        }
+        .task(id: pendingSeek) {
+            guard pendingSeek != nil else { return }
+            // Recover if the player rejects the seek or stops reporting progress.
+            do { try await Task.sleep(for: .seconds(8)) } catch { return }
+            pendingSeek = nil
+        }
+        .onChange(of: engine.current?.id) { _, _ in scrubbing = false; position = 0; pendingSeek = nil }
+    }
+
+    private func commitSeek(_ value: Double) {
+        let target = min(max(0, value), duration)
+        pendingSeek = target
+        engine.seek(to: target)
+    }
+
+    private func timestamp(_ value: Double) -> String {
+        let seconds = Int(value)
+        return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
 }
 

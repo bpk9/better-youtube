@@ -1,6 +1,42 @@
 import XCTest
 
 final class BetterYouTubeUITests: XCTestCase {
+    @MainActor func testWebScrubberSeeksInlineAndFullscreen() throws {
+        let app = XCUIApplication(); app.launch()
+        app.buttons["Search"].tap()
+        let field = app.textFields["searchField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap(); field.typeText("https://www.youtube.com/watch?v=kRQF9xii9cc\n")
+        let status = app.staticTexts["playbackStatus"]
+        expectation(for: NSPredicate(format: "label == 'Playing'"), evaluatedWith: status)
+        waitForExpectations(timeout: 35)
+        app.buttons["videoSurface"].tap()
+        app.buttons["videoOverlayPlayPause"].tap()
+        let scrubber = app.sliders["videoScrubber"]
+        XCTAssertTrue(scrubber.waitForExistence(timeout: 5))
+        let inlineHeight = app.buttons["videoSurface"].frame.height
+        scrubber.adjust(toNormalizedSliderPosition: 0.25)
+        expectation(for: NSPredicate { _, _ in self.seconds(app.staticTexts["playbackTime"].label) > 20 }, evaluatedWith: nil)
+        waitForExpectations(timeout: 8)
+        let inlineTime = seconds(app.staticTexts["playbackTime"].label)
+        XCTAssertEqual(status.label, "Paused", "Scrubbing must preserve paused playback")
+        attach(app, "Native slider in collapsed web player")
+        app.buttons["Full screen"].tap()
+        XCTAssertGreaterThan(app.buttons["videoSurface"].frame.height, inlineHeight * 2)
+        XCTAssertTrue(scrubber.isHittable)
+        scrubber.adjust(toNormalizedSliderPosition: 0.5)
+        expectation(for: NSPredicate { _, _ in self.seconds(app.staticTexts["fullscreenTime"].label) > inlineTime + 20 }, evaluatedWith: nil)
+        waitForExpectations(timeout: 8)
+        attach(app, "Native slider in expanded web player")
+        app.buttons["Exit full screen"].tap()
+        XCTAssertGreaterThan(seconds(app.staticTexts["playbackTime"].label), inlineTime + 20)
+        XCTAssertEqual(status.label, "Paused")
+        XCTAssertTrue(scrubber.isHittable)
+        app.buttons["videoOverlayPlayPause"].tap()
+        expectation(for: NSPredicate(format: "label == 'Playing'"), evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+    }
+
     @MainActor func testUnsubscribeWithReadOnlyGoogleShowsPermissionPrompt() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--subscription-permission-test"]
