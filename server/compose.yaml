@@ -1,8 +1,13 @@
 services:
   better-youtube:
     build: .
-    container_name: better-youtube
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import ssl,urllib.request; urllib.request.urlopen('https://localhost:8447/health',context=ssl._create_unverified_context(),timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     ports:
       - "${BETTER_BIND_IP}:8447:8447"
     env_file: .env

@@ -345,6 +345,7 @@ final class BetterYouTubeUITests: XCTestCase {
         app.buttons["Download current video"].tap()
         let offline = app.buttons["offline-aqz-KE-bpKQ"]
         XCTAssertTrue(offline.waitForExistence(timeout: 55), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Companion connected"].waitForExistence(timeout: 10))
         attach(app, "Offline download ready")
         app.terminate()
         app.launch()

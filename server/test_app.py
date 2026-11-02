@@ -35,6 +35,15 @@ class CompanionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['state'], 'queued')
 
+    def test_full_queue_still_accepts_existing_job(self):
+        app.enqueue(self.video)
+        for number in range(99):
+            app.enqueue(app.VideoInput(id=f'{number:011d}', title='Queued'))
+        self.assertEqual(self.client.post('/v1/jobs', headers=self.headers,
+            json=self.video.model_dump()).status_code, 200)
+        self.assertEqual(self.client.post('/v1/jobs', headers=self.headers,
+            json={'id': 'newvideo123', 'title': 'New'}).status_code, 429)
+
     def test_input_validation_and_ssrf(self):
         self.assertEqual(self.client.post('/v1/jobs', headers=self.headers, json={'id': '../secret', 'title': 'bad'}).status_code, 422)
         for url in ['http://127.0.0.1', 'https://www.youtube.com.evil.test/@x', 'https://www.youtube.com/redirect?q=http://127.0.0.1']:

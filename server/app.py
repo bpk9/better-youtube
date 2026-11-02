@@ -60,11 +60,11 @@ def row_job(row):
 
 def enqueue(video, automatic=False):
     with db() as c:
-        if c.execute("SELECT count(*) FROM jobs WHERE state IN ('queued','preparing')").fetchone()[0] >= 100:
-            raise HTTPException(429, 'The queue is full. Let existing downloads finish first.')
         old = c.execute('SELECT * FROM jobs WHERE id=?', (video.id,)).fetchone()
         if old and old['state'] in ('queued', 'preparing', 'ready'):
             return row_job(old)
+        if c.execute("SELECT count(*) FROM jobs WHERE state IN ('queued','preparing')").fetchone()[0] >= 100:
+            raise HTTPException(429, 'The queue is full. Let existing downloads finish first.')
         now = time.time()
         c.execute('''INSERT INTO jobs(id,title,channel,channelID,created,updated,automatic)
           VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state='queued',error=NULL,
@@ -201,7 +201,7 @@ async def lifespan(app):
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
 
-app = FastAPI(title='Better YouTube Companion', docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title='Better YouTube Companion', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
 async def authorized(authorization: str = Header(default='')):
     if not TOKEN or not hmac.compare_digest(authorization, 'Bearer ' + TOKEN):

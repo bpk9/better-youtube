@@ -15,9 +15,11 @@ Private, single-user service for preparing YouTube MP4 files and monitoring sele
 ## Pair and deploy
 
 1. Run `python3 scripts/prepare-companion.py --host YOUR_SERVER_LAN_IP` from the project root. Optionally add `--google-client-id YOUR_IOS_CLIENT_ID`.
-2. Copy `server/` (including private `.env` and `tls/`, excluding local test state) to a dedicated directory on your server. Keep `.env` and `tls/key.pem` private. Create `state/` owned by container UID 10001, and give that UID read access to the TLS key. Do not make the key world-readable.
-3. Run `docker compose up -d --build` in that directory. Use a dedicated project; this compose file does not modify other containers.
-4. Rebuild and install the iPhone app. `ios/BetterYouTube/Connection.plist` contains the private pairing token and pinned certificate fingerprint and must remain outside source control.
+2. With SSH key access to your server, run `python3 scripts/deploy-companion.py --ssh root@YOUR_SERVER --directory /YOUR_DEDICATED_APPDATA_DIRECTORY`. Add `--identity ~/.ssh/YOUR_DEPLOY_KEY` when using a dedicated SSH key. The script transfers an explicit file allowlist over SSH, restricts private-file permissions, gives the container UID access to its state and TLS key, and waits for Docker health. It requires Docker Compose with `--wait` support. Reuse this command for updates; do not regenerate pairing for ordinary deployments.
+3. Run `python3 scripts/verify-companion.py --video aqz-KE-bpKQ`. It verifies the exact certificate pin before sending the token, checks authentication, prepares a real video, and checks MP4 bytes and resumed transfers. The video remains in the normal bounded cache.
+4. Rebuild and install the iPhone app. `ios/BetterYouTube/Connection.plist` contains the private pairing token and pinned certificate fingerprint and must remain outside source control. Open Downloads and verify “Companion connected,” then download and play a video offline.
+
+The Docker build context is allowlisted by `.dockerignore`; pairing credentials, certificates, runtime data, and media never enter the build context. Deployment uses a dedicated `better-youtube` Compose project. Local pairing files must match the deployed server before installing the app.
 
 The service binds to the supplied LAN address on TCP 8447. TLS uses a private certificate whose exact fingerprint the app pins. No root certificate needs to be installed on the phone. Do not expose this port on the public Internet. To connect away from home, use an existing private VPN; changing the service hostname/certificate requires updating the paired app configuration.
 
