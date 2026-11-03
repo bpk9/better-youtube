@@ -201,52 +201,27 @@ import Security
         session?.cancel(); accessToken = nil; SecureStore.remove("google-refresh"); signedIn = false; subscriptions = []
         UserDefaults.standard.removeObject(forKey: "googleSubscriptions")
     }
-}
 
-struct ChannelVideoFeed {
-    static func load(_ channels: [ChannelRule]) async -> [Video] {
-        await withTaskGroup(of: [Video].self, returning: [Video].self) { group in
-            var iterator = channels.prefix(40).makeIterator()
-            func add(_ channel: ChannelRule) {
-                group.addTask {
-                    do {
-                        var components = URLComponents(string: "https://www.youtube.com/feeds/videos.xml")!
-                        components.queryItems = [URLQueryItem(name: "channel_id", value: channel.id)]
-                        var request = URLRequest(url: components.url!); request.timeoutInterval = 15
-                        let (data, response) = try await URLSession.shared.data(for: request)
-                        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 2_000_000 else { return [] }
-                        let reader = ChannelXMLReader(channel: channel)
-                        let parser = XMLParser(data: data); parser.delegate = reader; parser.shouldResolveExternalEntities = false
-                        return parser.parse() ? Array(reader.videos.prefix(3)) : []
-                    } catch { return [] }
-                }
+    func loadChannelVideos(_ channels: [ChannelRule]) async throws -> ChannelVideoFeed.Result {
+        guard signedIn else { return try await ChannelVideoFeed.load(channels) }
+        let revision = accountRevision
+        func token(refresh: Bool = false) async throws -> String {
+            guard revision == accountRevision, signedIn else { throw CancellationError() }
+            guard let clientID else { throw ChannelVideoFeed.FeedError.signInRequired }
+            if refresh || accessToken == nil || expiresAt < Date() {
+                guard let saved = SecureStore.read("google-refresh") else { throw ChannelVideoFeed.FeedError.signInRequired }
+                try await exchange(["client_id": clientID, "refresh_token": saved, "grant_type": "refresh_token"])
             }
-            for _ in 0..<4 { if let next = iterator.next() { add(next) } }
-            var result: [Video] = []
-            for await items in group { result += items; if let next = iterator.next() { add(next) } }
-            return result.sorted { $0.detail > $1.detail }
+            guard revision == accountRevision, signedIn, let accessToken else { throw CancellationError() }
+            return accessToken
         }
-    }
-}
-
-private final class ChannelXMLReader: NSObject, XMLParserDelegate {
-    let channel: ChannelRule
-    var videos: [Video] = []
-    private var inside = false, current = "", value = "", id = "", title = "", published = ""
-    init(channel: ChannelRule) { self.channel = channel }
-    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
-        if elementName == "entry" { inside = true; id = ""; title = ""; published = "" }
-        current = elementName; value = ""
-    }
-    func parser(_ parser: XMLParser, foundCharacters string: String) { value += string }
-    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        guard inside else { return }
-        if elementName == "yt:videoId" { id = value }
-        if elementName == "title" { title = value }
-        if elementName == "published" { published = value }
-        if elementName == "entry" {
-            if id.range(of: "^[A-Za-z0-9_-]{11}$", options: .regularExpression) != nil { videos.append(Video(id: id, title: title, channel: channel.title, detail: published, channelID: channel.id)) }
-            inside = false
+        do {
+            let accessToken = try await token()
+            return try await ChannelVideoFeed.load(channels, accessToken: accessToken)
+        } catch ChannelVideoFeed.FeedError.api(let status, _, _) where status == 401 {
+            // A token can be revoked before its advertised expiry. Retry once.
+            let accessToken = try await token(refresh: true)
+            return try await ChannelVideoFeed.load(channels, accessToken: accessToken)
         }
     }
 }

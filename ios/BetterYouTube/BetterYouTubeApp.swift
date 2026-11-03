@@ -152,9 +152,15 @@ struct ContentView: View {
                     else if engine.videos.isEmpty {
                         emptyState(icon: engine.tab == .subscriptions ? "person.crop.circle" : "sparkle.magnifyingglass", title: engine.tab == .subscriptions ? "No recent videos" : "Start with something you love", text: engine.message ?? "Search for a video or sign in to YouTube for your personal recommendations.")
                         HStack {
+                            if account.signedIn && engine.subscriptionFeed {
+                                Button("Try again") { engine.refresh() }.buttonStyle(.borderedProminent)
+                            }
                             Button("Search videos") { showSearch = true; searchFocused = true }.buttonStyle(.borderedProminent)
                             if !account.signedIn { Button("Sign in") { showAccount = true }.buttonStyle(.bordered) }
                         }.font(.subheadline)
+                    }
+                    if engine.subscriptionFeed, !engine.videos.isEmpty, let message = engine.message {
+                        Text(message).font(.subheadline).foregroundStyle(.secondary)
                     }
                     videoList(engine.videos)
                     if !engine.videos.isEmpty && !engine.subscriptionFeed {

@@ -1,6 +1,19 @@
 import XCTest
 
 final class BetterYouTubeUITests: XCTestCase {
+    @MainActor func testFollowingFeedFailureOffersRetry() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--subscription-permission-test"]
+        app.launch()
+        app.buttons["tab-Following"].tap()
+        XCTAssertTrue(app.staticTexts["Reconnect Google from the account screen to load your subscriptions."].waitForExistence(timeout: 10))
+        let retry = app.buttons["Try again"]
+        XCTAssertTrue(retry.exists)
+        retry.tap()
+        XCTAssertTrue(app.staticTexts["Reconnect Google from the account screen to load your subscriptions."].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Couldn’t load recent uploads. Pull to refresh when you’re online."].exists)
+    }
+
     @MainActor func testWebScrubberSeeksInlineAndFullscreen() throws {
         let app = XCUIApplication(); app.launch()
         app.buttons["Search"].tap()
