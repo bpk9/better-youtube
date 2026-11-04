@@ -1,5 +1,9 @@
 BETTER_BUNDLE_ID = com.example.betteryoutube
 DEVELOPMENT_TEAM =
 GOOGLE_REVERSED_CLIENT_ID = betteryoutube-google-unconfigured
+BETTER_COMPANION_HOST = localhost
+INFOPLIST_PREPROCESS = YES
+INFOPLIST_PREPROCESSOR_DEFINITIONS = BETTER_COMPANION_HOST=$(BETTER_COMPANION_HOST)
 #include? "Google.local.xcconfig"
+#include? "Companion.local.xcconfig"
 #include? "Local.xcconfig"

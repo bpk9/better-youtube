@@ -12,6 +12,7 @@ __pycache__/
 
 ios/Config/Local.xcconfig
 ios/Config/Google.local.xcconfig
+ios/Config/Companion.local.xcconfig
 .venv/
 *.pyc
 .env

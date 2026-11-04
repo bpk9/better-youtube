@@ -21,9 +21,40 @@ Private, single-user service for preparing YouTube MP4 files and monitoring sele
 
 The Docker build context is allowlisted by `.dockerignore`; pairing credentials, certificates, runtime data, and media never enter the build context. Deployment uses a dedicated `better-youtube` Compose project. Local pairing files must match the deployed server before installing the app.
 
-The service binds to the supplied LAN address on TCP 8447. TLS uses a private certificate whose exact fingerprint the app pins. No root certificate needs to be installed on the phone. Do not expose this port on the public Internet. To connect away from home, use an existing private VPN; changing the service hostname/certificate requires updating the paired app configuration.
+The service binds to the supplied address on TCP 8447. `--host` is the IP address or DNS name the iPhone connects to. `--bind-ip` is a numeric address assigned to the Docker host; it defaults to `--host` for numeric hosts and is required for DNS names. Wildcard bind addresses are rejected. TLS uses a private certificate whose exact fingerprint the app pins. No root certificate needs to be installed on the phone. Do not expose this port on the public Internet. Changing the service hostname/certificate requires updating the paired app configuration and rebuilding/installing the app.
 
-`prepare-companion.py` generates a new certificate each time. Run it deliberately: existing app builds pin the previous certificate. It preserves the token and any Google client ID already configured. Stop a running local test service before regenerating its certificate.
+`prepare-companion.py` generates a new certificate unless you pass `--reuse-certificate`, which requires an existing certificate and key. Run it deliberately: existing app builds pin the previous certificate. It preserves the token, server settings, and any Google client ID already configured. Stop a running local test service before regenerating its certificate.
+
+## Tailscale access away from home
+
+Install and connect Tailscale on the **Docker host** and iPhone in the same tailnet. This setup uses the host's Tailscale interface; a separate Tailscale container in userspace networking mode does not provide an address Docker can bind on the host. Ensure Tailscale is connected before starting the companion, including after a server reboot. Your tailnet access policy must allow the iPhone to reach the server on TCP 8447.
+
+On the server, run `tailscale ip -4` to find its Tailscale address. From this repository on your Mac, pair with that address (the values below are examples):
+
+```sh
+python3 scripts/prepare-companion.py --host 100.101.102.103
+```
+
+To use the server's full [MagicDNS name](https://tailscale.com/docs/features/magicdns), supply its Tailscale IP separately for Docker:
+
+```sh
+python3 scripts/prepare-companion.py \
+  --host companion.example.ts.net --bind-ip 100.101.102.103
+```
+
+Use the actual server name shown in Tailscale, with MagicDNS enabled. Both options bind only to the specified Tailscale address. The phone needs Tailscale connected at home as well as away. No exit node, public port forwarding, Tailscale Serve, or Funnel is needed; connect directly to the companion's pinned HTTPS service on port 8447. A TLS-terminating proxy presents a different certificate and fails the existing pin.
+
+When migrating an existing paired companion, append `--reuse-certificate` to either command. This keeps the certificate, private key, token, Google configuration, and server settings. The app authenticates the exact pinned certificate rather than its hostname, so an existing LAN certificate can be reused with the Tailscale endpoint. The changed endpoint still requires an app rebuild/install. Keep a backup of the ignored pairing files before migration if you need to roll back to the LAN endpoint.
+
+Deploy with `scripts/deploy-companion.py` as above, then connect the Mac to the same tailnet and run:
+
+```sh
+python3 scripts/verify-companion.py
+```
+
+This checks the certificate pin and authenticated API through the configured Tailscale endpoint. Add `--video aqz-KE-bpKQ` to verify media preparation and resumed downloads. Rebuild/install the iPhone app, connect Tailscale, turn off Wi-Fi to test away-from-home access, and open Downloads to check “Companion connected.” Downloads default to Wi-Fi only: turn off **Download on Wi-Fi only** in the app's Downloads settings when testing media transfers over cellular. Already downloaded files work without Tailscale or a network connection.
+
+For DNS hosts, setup writes an ignored `ios/Config/Companion.local.xcconfig` setting used by `Info.plist` to permit [manual server trust evaluation](https://developer.apple.com/documentation/bundleresources/information-property-list/nsexceptionallowsinsecurehttploads) for that exact host. The app still requires HTTPS, the matching certificate fingerprint, and the pairing token for API calls and background downloads. The exception does not include subdomains or other tailnet hosts.
 
 ## Google setup
 

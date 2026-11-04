@@ -66,6 +66,8 @@ Google sign-in imports subscriptions. Use a video’s options menu to subscribe 
 
 See [server/README.md](server/README.md) for pairing and Docker deployment. The companion prepares files and checks selected channels every 30 minutes. It uses one download worker, no transcoding, half a CPU core, 512 MB RAM, and a bounded cache.
 
+For downloads away from home, connect the iPhone and companion host through Tailscale. Pair using the server's Tailscale IP or MagicDNS name; see [Tailscale setup](server/README.md#tailscale-access-away-from-home).
+
 The server can prepare new videos while the app is closed. iOS decides when to wake the phone to fetch them, so overnight availability is not guaranteed. Force-quitting can delay background transfers until the app is opened again. Downloaded files play offline; captions require a subtitle track in the local file.
 
 ## Local configuration and privacy
@@ -74,6 +76,7 @@ Shared defaults live in `ios/Config/Defaults.xcconfig`. These files are local an
 
 - `ios/Config/Local.xcconfig`: bundle identifier and signing team.
 - `ios/Config/Google.local.xcconfig`: Google callback scheme.
+- `ios/Config/Companion.local.xcconfig`: certificate-pinning exception for the paired companion's DNS name.
 - `ios/BetterYouTube/Connection.plist`: Google client ID and optional server pairing.
 - `server/.env`, `server/tls/`, and `server/state/`: server credentials, TLS keys, and runtime data.
 - `.build*/` and `artifacts/`: compiled apps, diagnostics, and development records.
