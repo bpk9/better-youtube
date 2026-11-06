@@ -139,7 +139,8 @@ struct ContentView: View {
                     Button("Sign in") { showAccount = true }
                         .buttonStyle(.borderedProminent).accessibilityIdentifier("followingSignIn")
                 } else {
-                    sectionHeading(engine.query.isEmpty ? (engine.subscriptionFeed ? "Latest from your channels" : engine.discoveryMode ? "Explore" : engine.tab == .home ? "Made for your curiosity" : "Your subscriptions") : "Search results", subtitle: engine.query.isEmpty ? (engine.discoveryMode && !engine.subscriptionFeed ? "Discovery picks while your personal feed gets started." : "Find something worth your time.") : "“\(engine.query)”")
+                    sectionHeading(engine.query.isEmpty ? (engine.subscriptionFeed ? (engine.tab == .subscriptions ? engine.followingChannel?.title : nil) ?? "Latest from your channels" : engine.discoveryMode ? "Explore" : engine.tab == .home ? "Made for your curiosity" : "Your subscriptions") : "Search results", subtitle: engine.query.isEmpty ? (engine.discoveryMode && !engine.subscriptionFeed ? "Discovery picks while your personal feed gets started." : "Find something worth your time.") : "“\(engine.query)”")
+                    if engine.tab == .subscriptions && !account.subscriptions.isEmpty { followingChannels }
                     if !account.signedIn && engine.signedOut && engine.query.isEmpty {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) { Text("Bring your YouTube along").font(.subheadline.bold()); Text("Connect your account for subscriptions.").font(.caption).foregroundStyle(.secondary) }
@@ -192,6 +193,51 @@ struct ContentView: View {
                 }
             }
         }.contentMargins(.trailing, 2)
+    }
+    private var followingChannels: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 10) {
+                    followingChannelButton(nil).id("all")
+                    ForEach(account.subscriptions) { channel in
+                        followingChannelButton(channel).id(channel.id)
+                    }
+                }.padding(.vertical, 3)
+            }
+            .accessibilityIdentifier("followingChannelFilters")
+            .onAppear { proxy.scrollTo(engine.followingChannelID ?? "all", anchor: .center) }
+            .onChange(of: engine.followingChannelID) { _, id in
+                withAnimation { proxy.scrollTo(id ?? "all", anchor: .center) }
+            }
+        }
+        .task { await account.refreshSubscriptions() }
+    }
+    private func followingChannelButton(_ channel: ChannelRule?) -> some View {
+        let selected = engine.followingChannelID == channel?.id
+        return Button { engine.selectFollowingChannel(channel?.id) } label: {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle().fill(panel)
+                    if let channel {
+                        AsyncImage(url: channel.thumbnailURL.flatMap(URL.init(string:))) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            Text(String(channel.title.prefix(1)).uppercased()).font(.title2.bold()).foregroundStyle(accent)
+                        }
+                    } else {
+                        Image(systemName: "square.grid.2x2.fill").font(.title2).foregroundStyle(selected ? accent : .white)
+                    }
+                }
+                .frame(width: 56, height: 56).clipShape(Circle())
+                .padding(4).overlay { Circle().strokeBorder(selected ? accent : .clear, lineWidth: 2) }
+                Text(channel?.title ?? "All").font(.caption.weight(selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? .white : .secondary).lineLimit(1)
+            }.frame(width: 76)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(channel.map { "Filter by \($0.title)" } ?? "All channels")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("followingChannel-\(channel?.id ?? "all")")
     }
     private func videoList(_ items: [Video]) -> some View {
         LazyVStack(spacing: 24) {

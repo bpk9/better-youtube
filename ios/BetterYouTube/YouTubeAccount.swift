@@ -26,6 +26,11 @@ import Security
     override init() {
         super.init()
         #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--following-filter-test") {
+            signedIn = true
+            subscriptions = (1...45).map { ChannelRule(id: String(format: "UC%022d", $0), title: String(format: "Channel %02d", $0)) }
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("--subscription-permission-test") {
             signedIn = true
             canManageSubscriptions = false
@@ -94,7 +99,7 @@ import Security
     }
     func refreshSubscriptions() async {
         #if targetEnvironment(simulator)
-        if ProcessInfo.processInfo.arguments.contains("--subscription-permission-test") { return }
+        if ProcessInfo.processInfo.arguments.contains("--subscription-permission-test") || ProcessInfo.processInfo.arguments.contains("--following-filter-test") { return }
         #endif
         guard let clientID, !refreshingSubscriptions, !updatingSubscriptions else { return }
         refreshingSubscriptions = true
@@ -116,7 +121,11 @@ import Security
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "Google", code: 2, userInfo: [NSLocalizedDescriptionKey: "YouTube could not load subscriptions. Check that YouTube Data API v3 is enabled for the app’s Google project."]) }
                 let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
                 for item in object["items"] as? [[String: Any]] ?? [] {
-                    if let snippet = item["snippet"] as? [String: Any], let resource = snippet["resourceId"] as? [String: Any], let id = resource["channelId"] as? String, let title = snippet["title"] as? String { result.append(ChannelRule(id: id, title: title)) }
+                    if let snippet = item["snippet"] as? [String: Any], let resource = snippet["resourceId"] as? [String: Any], let id = resource["channelId"] as? String, let title = snippet["title"] as? String {
+                        let thumbnails = snippet["thumbnails"] as? [String: [String: Any]]
+                        let thumbnail = thumbnails?["medium"]?["url"] as? String ?? thumbnails?["default"]?["url"] as? String ?? thumbnails?["high"]?["url"] as? String
+                        result.append(ChannelRule(id: id, title: title, thumbnailURL: thumbnail))
+                    }
                 }
                 next = object["nextPageToken"] as? String
             } while next != nil
@@ -204,8 +213,20 @@ import Security
 }
 
 struct ChannelVideoFeed {
-    static func load(_ channels: [ChannelRule]) async -> [Video] {
-        await withTaskGroup(of: [Video].self, returning: [Video].self) { group in
+    static func load(_ channels: [ChannelRule], perChannelLimit: Int = 3) async -> [Video] {
+        #if targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--following-filter-test") {
+            // Keep requests in flight so UI tests exercise stale-result protection.
+            let delay = channels.count == 1 ? (channels.first?.title == "Channel 01" ? 2000 : 600) : 1200
+            try? await Task.sleep(for: .milliseconds(delay))
+            return channels.prefix(40).flatMap { channel in
+                (1...min(perChannelLimit, 5)).map { index in
+                    Video(id: String(channel.id.suffix(9)) + String(format: "%02d", index), title: "\(channel.title) upload \(index)", channel: channel.title, detail: "2026-11-01T12:00:00Z", channelID: channel.id)
+                }
+            }
+        }
+        #endif
+        return await withTaskGroup(of: [Video].self, returning: [Video].self) { group in
             var iterator = channels.prefix(40).makeIterator()
             func add(_ channel: ChannelRule) {
                 group.addTask {
@@ -217,7 +238,7 @@ struct ChannelVideoFeed {
                         guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 2_000_000 else { return [] }
                         let reader = ChannelXMLReader(channel: channel)
                         let parser = XMLParser(data: data); parser.delegate = reader; parser.shouldResolveExternalEntities = false
-                        return parser.parse() ? Array(reader.videos.prefix(3)) : []
+                        return parser.parse() ? Array(reader.videos.prefix(perChannelLimit)) : []
                     } catch { return [] }
                 }
             }

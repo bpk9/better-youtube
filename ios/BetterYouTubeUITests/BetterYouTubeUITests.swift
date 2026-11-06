@@ -1,6 +1,74 @@
 import XCTest
 
 final class BetterYouTubeUITests: XCTestCase {
+    @MainActor func testFollowingChannelFilterAndReset() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--following-filter-test"]
+        app.launch()
+        app.buttons["tab-Following"].tap()
+        let all = app.buttons["All channels"]
+        let first = app.buttons["Filter by Channel 01"]
+        let second = app.buttons["Filter by Channel 02"]
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(all.isSelected)
+        attach(app, "Following channel icons")
+
+        first.tap()
+        second.tap()
+        let video = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "video-")).firstMatch
+        expectation(for: NSPredicate(format: "label == %@", "Play Channel 02 upload 1"), evaluatedWith: video)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(second.isSelected)
+        XCTAssertFalse(first.isSelected)
+        let staleResult = expectation(for: NSPredicate(format: "label != %@", "Play Channel 02 upload 1"), evaluatedWith: video)
+        staleResult.isInverted = true
+        wait(for: [staleResult], timeout: 2.5)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND NOT label BEGINSWITH %@", "video-", "Play Channel 02")).count, 0)
+        attach(app, "Following filtered to one channel")
+
+        app.scrollViews.firstMatch.swipeDown()
+        expectation(for: NSPredicate(format: "label == %@", "Play Channel 02 upload 1"), evaluatedWith: video)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(second.isSelected, "Refresh must preserve the channel filter")
+        app.buttons["tab-Library"].tap()
+        app.buttons["tab-Following"].tap()
+        XCTAssertTrue(second.isSelected, "Returning to Following must preserve the filter")
+
+        all.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Play Channel 01 upload 1"), evaluatedWith: video)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(all.isSelected)
+        second.tap()
+        app.buttons["YouTube account"].tap()
+        app.buttons["Disconnect Google"].tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.staticTexts["Please sign in"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.scrollViews["followingChannelFilters"].exists)
+        XCTAssertFalse(video.exists, "Signing out must discard in-flight channel results")
+    }
+
+    @MainActor func testFollowingFilterCanReachChannelsOutsideCombinedFeed() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--following-filter-test"]
+        app.launch()
+        app.buttons["tab-Following"].tap()
+        let filters = app.scrollViews["followingChannelFilters"]
+        XCTAssertTrue(filters.waitForExistence(timeout: 5))
+        let last = app.buttons["Filter by Channel 45"]
+        for _ in 0..<18 {
+            if last.exists && last.isHittable { break }
+            filters.swipeLeft()
+        }
+        XCTAssertTrue(last.isHittable, "Every subscription must be reachable by horizontal scrolling")
+        last.tap()
+        let video = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "video-")).firstMatch
+        expectation(for: NSPredicate(format: "label == %@", "Play Channel 45 upload 1"), evaluatedWith: video)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(last.isSelected)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND NOT label BEGINSWITH %@", "video-", "Play Channel 45")).count, 0)
+        attach(app, "Channel beyond combined feed limit")
+    }
+
     @MainActor func testWebScrubberSeeksInlineAndFullscreen() throws {
         let app = XCUIApplication(); app.launch()
         app.buttons["Search"].tap()
