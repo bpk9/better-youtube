@@ -2,9 +2,43 @@
 from __future__ import annotations
 
 import os
+import ipaddress
 from pathlib import Path
 import plistlib
 import re
+from urllib.parse import urlsplit
+
+
+def companion_host(host: str) -> str:
+    """Accept a bare IP or ASCII DNS name, never a URL, port, or config text."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        host = host.lower().removesuffix('.')
+        if len(host) > 253 or not re.fullmatch(
+            r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*', host
+        ):
+            raise ValueError('Use a bare IP address or hostname, without a scheme or port.')
+        return host
+    if address.is_unspecified or address.is_multicast or '%' in host:
+        raise ValueError('Use a specific unicast IP address for the companion.')
+    return str(address)
+
+
+def configure_companion_ats(root: Path) -> None:
+    """Allow manual certificate pinning only for the paired DNS host."""
+    connection = plistlib.loads((root / 'ios/BetterYouTube/Connection.plist').read_bytes())
+    host = urlsplit(connection.get('ServerURL', '')).hostname
+    exception_host = 'localhost'
+    if host:
+        host = companion_host(host)
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            exception_host = host
+    config = root / 'ios/Config/Companion.local.xcconfig'
+    config.write_text(f'BETTER_COMPANION_HOST = {exception_host}\n')
+    os.chmod(config, 0o600)
 
 
 def setup_ios(root: Path, bundle_id: str | None = None, team: str | None = None) -> None:
@@ -17,6 +51,7 @@ def setup_ios(root: Path, bundle_id: str | None = None, team: str | None = None)
     if not connection.exists():
         connection.write_bytes((ios / 'BetterYouTube/Connection.example.plist').read_bytes())
         os.chmod(connection, 0o600)
+    configure_companion_ats(root)
     local = ios / 'Config/Local.xcconfig'
     text = local.read_text() if local.exists() else '// Local signing overrides; excluded from source control.\n'
     for key, value in [('BETTER_BUNDLE_ID', bundle_id), ('DEVELOPMENT_TEAM', team)]:

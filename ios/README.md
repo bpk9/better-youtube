@@ -8,6 +8,8 @@ Open `BetterYouTube.xcodeproj` after running `python3 scripts/setup-ios.py` from
 
 `BetterYouTube/Connection.example.plist` is the empty template. Setup copies it to the ignored `Connection.plist` only when that file does not exist. Use `scripts/configure-google.py` for Google sign-in and `scripts/prepare-companion.py` for server pairing. The shared `Info.plist` expands the Google callback and background-task identifier from build settings.
 
+The companion supports Tailscale IPs and MagicDNS names; follow [the companion's Tailscale setup](../server/README.md#tailscale-access-away-from-home). Setup derives the ignored `Config/Companion.local.xcconfig` from the current pairing so `Info.plist` allows manual certificate pinning for that exact DNS host. Rerun `scripts/setup-ios.py` before building if you edit `Connection.plist` yourself. The same pinned session delegate protects API requests and background media transfers. Connect the iPhone's Tailscale VPN before using the companion and disable Wi-Fi-only downloads if you want media transfers over cellular.
+
 Keep the same local bundle ID and signing team when updating an installed app to preserve its storage and Keychain access. Register any new bundle ID with its own matching Google iOS OAuth client.
 
 ## Tests

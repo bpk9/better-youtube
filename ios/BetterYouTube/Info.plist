@@ -29,6 +29,15 @@
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>BETTER_COMPANION_HOST</key>
+			<dict>
+				<!-- The companion URLSession delegate still requires the exact certificate pin. -->
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your private companion server to prepare and download videos for offline playback.</string>
