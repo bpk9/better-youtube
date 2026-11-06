@@ -96,6 +96,7 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
     @Published var signedOut = true
     @Published var subscriptionFeed = false
     private var feedRevision = 0
+    private var channelFeedTask: Task<Void, Never>?
     @Published var blockAds = UserDefaults.standard.object(forKey: "blockAds") as? Bool ?? true
     @Published var backgroundAudio = UserDefaults.standard.object(forKey: "backgroundAudio") as? Bool ?? true
     let feedWeb: WKWebView
@@ -267,18 +268,20 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         tab = newTab; showBrowser = false; query = ""
         if newTab == .home { loadHome() }
         if newTab == .subscriptions { loadFollowing() }
-        if newTab == .library { feedRevision += 1; feedTimeout?.cancel(); feedWeb.stopLoading(); loading = false }
+        if newTab == .library { feedRevision += 1; channelFeedTask?.cancel(); feedTimeout?.cancel(); feedWeb.stopLoading(); loading = false }
     }
     private func loadFollowing() {
-        feedRevision += 1; feedTimeout?.cancel(); feedWeb.stopLoading()
-        subscriptionFeed = true; discoveryMode = false; videos = []; message = nil; loading = false
+        feedRevision += 1; channelFeedTask?.cancel(); feedTimeout?.cancel(); feedWeb.stopLoading()
         let account = YouTubeAccount.shared
+        let ids = Set(account.subscriptions.map(\.id))
+        videos = subscriptionFeed && account.signedIn ? videos.filter { ids.contains($0.channelID ?? "") } : []
+        subscriptionFeed = true; discoveryMode = false; message = nil; loading = false
         // Website cookies and manually followed channels do not establish Google authorization.
         guard account.signedIn else { return }
         if !account.subscriptions.isEmpty { loadChannelFeed(account.subscriptions); return }
         loading = true
         let revision = feedRevision
-        Task {
+        channelFeedTask = Task {
             await account.refreshSubscriptions()
             guard revision == feedRevision, tab == .subscriptions, account.signedIn else { return }
             if !account.subscriptions.isEmpty { loadChannelFeed(account.subscriptions) }
@@ -286,13 +289,20 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         }
     }
     func loadChannelFeed(_ rules: [ChannelRule]) {
-        subscriptionFeed = true; loading = true; videos = []; message = nil; feedTimeout?.cancel(); feedWeb.stopLoading(); feedRevision += 1
+        let ids = Set(rules.map(\.id))
+        videos = subscriptionFeed ? videos.filter { ids.contains($0.channelID ?? "") } : []
+        subscriptionFeed = true; loading = true; message = nil; channelFeedTask?.cancel(); feedTimeout?.cancel(); feedWeb.stopLoading(); feedRevision += 1
         let revision = feedRevision
-        Task {
-            let items = await ChannelVideoFeed.load(rules)
-            guard revision == feedRevision else { return }
-            videos = items; loading = false
-            if items.isEmpty { message = "Couldn’t load recent uploads. Pull to refresh when you’re online." }
+        channelFeedTask = Task {
+            do {
+                let result = try await YouTubeAccount.shared.loadChannelVideos(rules)
+                guard !Task.isCancelled, revision == feedRevision else { return }
+                videos = result.videos; loading = false
+                message = result.message ?? (videos.isEmpty ? "Your channels haven’t published any recent videos yet." : nil)
+            } catch {
+                guard !Task.isCancelled, revision == feedRevision else { return }
+                loading = false; message = error.localizedDescription
+            }
         }
     }
     func search(_ text: String) {
@@ -306,6 +316,7 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         loadFeed(components.url!)
     }
     func loadFeed(_ url: URL) {
+        channelFeedTask?.cancel()
         lastFeedURL = url; videos = []; message = nil; loading = true
         feedRevision += 1
         let revision = feedRevision

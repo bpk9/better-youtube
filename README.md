@@ -62,6 +62,8 @@ Rebuild the app, open its account screen, and select **Sign in with Google**. Th
 
 Google sign-in imports subscriptions. Use a video’s options menu to subscribe or unsubscribe, or unsubscribe from the channel list on the account screen. These changes sync to your YouTube account; automatic download rules remain independently controlled. It does not sign the embedded website into YouTube or provide a personalized Home recommendation API. Google projects in testing mode can require periodic reauthorization.
 
+Following loads the latest 15 uploads per subscribed channel through the [YouTube Data API](https://developers.google.com/youtube/v3/docs/playlistItems/list) and combines them by publication date. It checks every subscription, with at most four upload requests in flight. Existing Google connections can use this without granting additional permissions. Failed refreshes preserve already-loaded videos and show a retry message; quota failures are identified explicitly. Signed-out discovery and the companion’s automatic downloads still use public channel RSS feeds.
+
 ## Optional companion server
 
 See [server/README.md](server/README.md) for pairing and Docker deployment. The companion prepares files and checks selected channels every 30 minutes. It uses one download worker, no transcoding, half a CPU core, 512 MB RAM, and a bounded cache.
@@ -92,3 +94,5 @@ bash scripts/test-simulator.sh YOUR_SIMULATOR_ID
 ```
 
 Use `xcrun simctl list devices available` to find a simulator, or set `SIMULATOR_ID`. UI integration tests use live YouTube content and may depend on network availability. Google integration requires your configured OAuth client. The end-to-end download test requires a running, paired companion. Native-file playback tests require the local MP4 fixture described in [ios/README.md](ios/README.md).
+
+On macOS, the Python script tests also compile the production Swift feed loader and exercise uploads, channel batching beyond 40 subscriptions, publication dates, unavailable videos, and API failures with controlled HTTP responses.
