@@ -1,6 +1,62 @@
 import XCTest
 
 final class BetterYouTubeUITests: XCTestCase {
+    @MainActor func testDeepLinkBrowserDestinations() throws {
+        let app = XCUIApplication(); app.launch()
+        for route in ["results?search_query=Big%20Buck%20Bunny", "youtube.com/@YouTube", "playlist?list=PLexample"] {
+            app.open(URL(string: "betteryoutube://" + route)!)
+            XCTAssertTrue(app.staticTexts["YouTube · secure web view"].waitForExistence(timeout: 10))
+            XCTAssertFalse(app.staticTexts["playbackTime"].exists)
+            app.buttons["Done"].tap()
+            XCTAssertFalse(app.staticTexts["YouTube · secure web view"].exists)
+        }
+    }
+
+    @MainActor func testDeepLinkColdAndWarmNativePlayback() throws {
+        let app = XCUIApplication()
+        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = source.appendingPathComponent("server/state/media/aqz-KE-bpKQ.mp4").path
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: fixture), "Requires local MP4 fixture")
+        app.launchEnvironment["BETTER_YOUTUBE_TEST_VIDEO"] = fixture
+        app.open(URL(string: "betteryoutube://watch?v=aqz-KE-bpKQ&t=1m30s&autoplay=0")!)
+        let time = app.staticTexts["playbackTime"]
+        XCTAssertTrue(time.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate { _, _ in self.seconds(time.label) == 90 }, evaluatedWith: nil)
+        waitForExpectations(timeout: 15)
+        XCTAssertEqual(app.staticTexts["playbackStatus"].label, "Paused")
+        attach(app, "Cold link paused at 90 seconds")
+
+        // Same video, different timestamp while already running, through the wrapper used by Shortcuts.
+        app.open(URL(string: "betteryoutube://open?url=https%3A%2F%2Fyoutu.be%2Faqz-KE-bpKQ%3Ft%3D30%26end%3D34")!)
+        expectation(for: NSPredicate { _, _ in
+            self.seconds(time.label) >= 30 && self.seconds(time.label) < 36 && app.staticTexts["playbackStatus"].label == "Playing"
+        }, evaluatedWith: nil)
+        waitForExpectations(timeout: 15)
+        expectation(for: NSPredicate { _, _ in
+            self.seconds(time.label) >= 34 && self.seconds(time.label) < 37 && app.staticTexts["playbackStatus"].label == "Paused"
+        }, evaluatedWith: nil)
+        waitForExpectations(timeout: 10)
+        attach(app, "Warm link stopped at end timestamp")
+        app.open(URL(string: "betteryoutube://watch?v=aqz-KE-bpKQ&autoplay=0")!)
+        expectation(for: NSPredicate { _, _ in self.seconds(time.label) == 0 }, evaluatedWith: nil)
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(app.staticTexts["playbackStatus"].label, "Paused")
+    }
+
+    @MainActor func testPastedTimestampWebPlayback() throws {
+        let app = XCUIApplication(); app.launch()
+        app.buttons["Search"].tap()
+        let field = app.textFields["searchField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap(); field.typeText("https://youtu.be/kRQF9xii9cc?t=1m30s\n")
+        expectation(for: NSPredicate { _, _ in
+            self.seconds(app.staticTexts["playbackTime"].label) >= 90 && app.staticTexts["playbackStatus"].label == "Playing"
+        }, evaluatedWith: nil)
+        waitForExpectations(timeout: 40)
+        XCTAssertLessThan(self.seconds(app.staticTexts["playbackTime"].label), 120)
+        attach(app, "Web timestamp playback")
+    }
+
     @MainActor func testFollowingFeedFailureOffersRetry() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--subscription-permission-test"]

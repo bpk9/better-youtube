@@ -25,6 +25,7 @@ scripts/                   Local setup, builds, and validation
 
 - Discovery, search, subscriptions, an offline download library, and local watch history.
 - Google sign-in through the system authentication browser. Sign-in is remembered securely on the device; no account email is hardcoded.
+- Open YouTube video links at their linked timestamps, including Shorts, live, and embed links; browse linked playlists, channels, searches, and Clips in the app. See [YouTube links](docs/youtube-links.md).
 - One-tap playback, fullscreen, Picture in Picture, AirPlay, captions/language selection, and playback speeds from 0.25× to 2×.
 - Native playback for compatible streams and downloaded files, with web playback as fallback.
 - Best-effort ad filtering. YouTube changes can affect playback, filtering, and extraction.
@@ -85,6 +86,7 @@ Setup preserves existing configuration unless you explicitly provide replacement
 ## Validation
 
 ```sh
+bash scripts/test-links.sh
 node scripts/test-bridge.cjs
 python3 -m unittest discover -s scripts -p 'test_*.py' -v
 python3.12 -m venv .venv

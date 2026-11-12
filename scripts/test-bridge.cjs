@@ -154,3 +154,32 @@ assert.equal(optionVideo.playbackRate, 2, 'invalid speed is ignored');
 optionVideo = fakeVideo(); optionEnv.timers[0]();
 assert.equal(optionVideo.playbackRate, 2, 'replacement media inherits playback speed');
 console.log('Playback settings passed: delayed captions, language selection, captions off, rate validation, paused media, replacement media.');
+
+// Deep links must wait for actual media metadata, survive replacement before readiness,
+// and seek once without dragging later user scrubs back to the initial timestamp.
+let linkedVideo = null, linkedAd = false;
+const linkEnv = environment('player', {
+  location: { hostname: 'm.youtube.com', pathname: '/watch', href: 'https://m.youtube.com/watch?v=abcdefghijk&by_request=test-request&by_start=90&by_end=100' },
+  document: { title: 'Timestamp test', readyState: 'complete', querySelectorAll: () => [],
+    querySelector: s => s === 'video' ? linkedVideo : s === '#movie_player' ? { classList: { contains: () => linkedAd } } : null,
+    getElementById: () => true, addEventListener() {}, documentElement: {} }
+});
+linkEnv.context.BetterYouTube.setPlaybackRequested(true);
+linkedVideo = fakeVideo(); linkEnv.timers[0]();
+assert.equal(linkedVideo.currentTime, 0, 'no seek before metadata');
+assert.equal(linkedVideo.attempts, 0, 'no autoplay before the requested seek');
+linkedVideo = fakeVideo(); linkedVideo.readyState = 3; linkedAd = true;
+linkEnv.timers[0]();
+assert.equal(linkEnv.messages.filter(m => m.type === 'playback').at(-1).initialSeekPending, true, 'ad must not consume the timestamp');
+linkedAd = false; linkedVideo.currentTime = 0;
+linkEnv.timers[0](); linkEnv.timers[0]();
+assert.equal(linkedVideo.currentTime, 90, 'late replacement media seeks to link time');
+assert.equal(linkedVideo.attempts, 1, 'autoplay follows successful seek');
+assert.equal(linkEnv.messages.filter(m => m.type === 'playback').at(-1).initialSeekPending, false);
+assert.equal(linkEnv.messages[0].requestID, 'test-request', 'messages identify the selection, including repeated links to the same video');
+linkEnv.context.BetterYouTube.seekTo(95); linkEnv.timers[0]();
+assert.equal(linkedVideo.currentTime, 95, 'polling does not undo manual seeks');
+linkedVideo.currentTime = 100; linkedVideo.paused = false; linkEnv.timers[0]();
+assert.equal(linkedVideo.paused, true, 'end timestamp pauses playback');
+assert.equal(linkEnv.messages.filter(m => m.type === 'playback').at(-1).linkEnded, true);
+console.log('Deep-link bridge tests passed: delayed metadata, replacement media, ads, seek-before-autoplay, request isolation, manual seeking, end timestamp.');

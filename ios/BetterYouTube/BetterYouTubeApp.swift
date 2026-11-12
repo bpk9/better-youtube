@@ -60,6 +60,10 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) { settings }
         .sheet(isPresented: $showAccount) { accountSheet }
         .sheet(isPresented: $showDownloads) { DownloadsView() }
+        .onChange(of: engine.incomingLinkRevision) { _, _ in
+            showSettings = false; showAccount = false; showDownloads = false
+            showSearch = false; searchFocused = false
+        }
         .onChange(of: engine.fullScreen) { _, _ in searchFocused = false }
         .onChange(of: engine.tab) { _, _ in searchFocused = false }
         .onChange(of: account.subscriptions.map(\.id)) { _, _ in
