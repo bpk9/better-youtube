@@ -2,7 +2,9 @@
 (() => {
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
   const config = window.BetterYouTubeConfig;
-  const send = data => { try { window.webkit.messageHandlers.betterYouTube.postMessage(data); } catch (_) {} };
+  const linkParams = new URL(location.href).searchParams;
+  const requestID = linkParams.get("by_request") || "";
+  const send = data => { try { window.webkit.messageHandlers.betterYouTube.postMessage({ ...data, requestID }); } catch (_) {} };
   const originalParse = JSON.parse;
   const adKeys = new Set(['adPlacements', 'playerAds', 'adSlots', 'adBreakHeartbeatParams']);
   function clean(value, depth = 0) {
@@ -187,8 +189,27 @@
     if (event.isTrusted && (event.code === 'Space' || event.code === 'KeyK') &&
         !/INPUT|TEXTAREA/.test(event.target?.tagName || '') && document.querySelector('video')?.paused === false) userPaused();
   }, true);
+  const startValue = Number(linkParams.get('by_start'));
+  let initialSeek = Number.isFinite(startValue) && startValue > 0 ? startValue : null;
+  const endValue = Number(linkParams.get('by_end'));
+  const linkEnd = Number.isFinite(endValue) && endValue > startValue ? endValue : null;
+  let linkEnded = false, initialSeekFailed = false;
+  const initialSeekDeadline = Date.now() + 30000;
+  function applyInitialSeek() {
+    if (initialSeek === null) return true;
+    if (Date.now() >= initialSeekDeadline) { initialSeek = null; initialSeekFailed = true; return true; }
+    const video = document.querySelector('video');
+    const player = document.querySelector('#movie_player');
+    if (!video || video.readyState < 1 || player?.classList?.contains('ad-showing')) return false;
+    const target = Number.isFinite(video.duration) && video.duration > 0 ? Math.min(initialSeek, Math.max(0, video.duration - 0.1)) : initialSeek;
+    if (!video.seeking && video.readyState >= 2 && Math.abs(video.currentTime - target) < 1) {
+      initialSeek = null; return true;
+    }
+    try { video.currentTime = target; } catch (_) {}
+    return false;
+  }
   function startPlayback() {
-    if (!startPending || !wantsPlayback) return;
+    if (!applyInitialSeek() || !startPending || !wantsPlayback) return;
     const now = Date.now();
     if (now >= startDeadline) { cancelStartup(); return; }
     const video = document.querySelector('video');
@@ -248,8 +269,8 @@
       if (!requested) pausePlayback();
       else if (!wantsPlayback) requestPlayback();
     },
-    seek: seconds => { const v = document.querySelector('video'); if (v) v.currentTime = Math.max(0, Math.min(Number.isFinite(v.duration) ? v.duration : Infinity, v.currentTime + seconds)); },
-    seekTo: seconds => { const v = document.querySelector('video'); if (v) v.currentTime = seconds; },
+    seek: seconds => { initialSeek = null; const v = document.querySelector('video'); if (v) v.currentTime = Math.max(0, Math.min(Number.isFinite(v.duration) ? v.duration : Infinity, v.currentTime + seconds)); },
+    seekTo: seconds => { initialSeek = null; const v = document.querySelector('video'); if (v) v.currentTime = seconds; },
     pip: () => { const v = document.querySelector('video'); if (!v) return false; if (v.webkitSupportsPresentationMode?.('picture-in-picture')) { v.webkitSetPresentationMode('picture-in-picture'); return true; } return false; }
   };
   let streamSent = '', adCount = 0, wasAd = false, styledPlayer = null;
@@ -277,6 +298,10 @@
       if (video && Number.isFinite(video.duration) && video.duration > 0) video.currentTime = video.duration;
     }
     wasAd = ad;
+    if (!ad && video && initialSeek === null && linkEnd !== null) {
+      linkEnded = video.currentTime >= linkEnd;
+      if (linkEnded) pausePlayback();
+    }
     let response = window.ytInitialPlayerResponse;
     try { response = player?.getPlayerResponse?.() || response; } catch (_) {}
     const options = playbackOptions(player, video, response);
@@ -299,7 +324,7 @@
       if (video.currentTime > sampledTime && !video.seeking) lastProgressAt = Date.now();
       sampledTime = video.currentTime;
       const actuallyPlaying = !video.paused && !video.ended && !video.seeking && video.readyState >= 3 && Date.now() - lastProgressAt < 1500;
-      const state = { type: 'playback', playing: actuallyPlaying, starting: startPending && wantsPlayback, muted: video.muted || video.volume === 0,
+      const state = { type: 'playback', initialSeekPending: initialSeek !== null, initialSeekFailed, linkEnded, playing: actuallyPlaying, starting: startPending && wantsPlayback, muted: video.muted || video.volume === 0,
         ...options,
         time: Number.isFinite(video.currentTime) ? video.currentTime : 0, duration: Number.isFinite(video.duration) ? video.duration : 0, title: response?.videoDetails?.title || document.title.replace(/ - YouTube$/, ''), videoID: response?.videoDetails?.videoId || new URL(location.href).searchParams.get('v') || '' };
       const encoded = JSON.stringify(state);

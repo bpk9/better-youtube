@@ -91,6 +91,7 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
     @Published var adsSkipped = 0
     @Published var blockerReady = false
     @Published var blockerError: String?
+    @Published private(set) var incomingLinkRevision = 0
     @Published var query = ""
     @Published var discoveryMode = false
     @Published var signedOut = true
@@ -112,6 +113,9 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
     private var isConfigured = false
     private var lastFeedURL: URL = URL(string: "https://m.youtube.com/")!
     private var pendingOpen: URL?
+    private var pendingStart: Double?
+    private var playbackEnd: Double?
+    private var playbackRequestID = UUID().uuidString
     private var playbackRequested = false
     private var ownsNativeAudioSession = false
     private let playbackDiagnostics = ProcessInfo.processInfo.arguments.contains("--playback-diagnostics")
@@ -179,7 +183,8 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor in
                 guard let self, self.nativeActive else { return }
-                self.elapsed = time.seconds.isFinite ? time.seconds : 0
+                if self.pendingStart == nil { self.elapsed = time.seconds.isFinite ? time.seconds : 0 }
+                if let end = self.playbackEnd, self.elapsed >= end, self.playbackRequested { self.pause(reason: "linkEnd") }
                 let d = self.player.currentItem?.duration.seconds ?? 0
                 self.duration = d.isFinite ? d : 0
                 self.playing = self.player.timeControlStatus == .playing
@@ -308,7 +313,7 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
     func search(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if let url = URL(string: trimmed), Self.videoID(url) != nil { open(url); return }
+        if let url = URL(string: trimmed), YouTubeLink.parse(url) != nil { open(url); return }
         if tab != .home { dismissInlinePlayer() }
         query = trimmed; tab = .home; showBrowser = false; discoveryMode = false; subscriptionFeed = false
         var components = URLComponents(string: "https://m.youtube.com/results")!
@@ -340,46 +345,86 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
     func loadMore() { feedWeb.evaluateJavaScript("window.BetterYouTube?.more()", completionHandler: nil) }
     func finishBrowsing() { showBrowser = false; if tab == .subscriptions { selectTab(.subscriptions) } else { loadHome() } }
 
-    static func videoID(_ url: URL) -> String? {
-        let host = url.host?.lowercased() ?? ""
-        var id: String?
-        if host == "youtu.be" { id = url.pathComponents.dropFirst().first }
-        else if host == "youtube.com" || host.hasSuffix(".youtube.com") || url.scheme == "betteryoutube" {
-            id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "v" })?.value
-            if id == nil && (url.path.hasPrefix("/shorts/") || url.path.hasPrefix("/embed/")) { id = url.pathComponents.last }
-        }
-        guard let id, id.range(of: "^[a-zA-Z0-9_-]{11}$", options: .regularExpression) != nil else { return nil }
-        return id
-    }
+    static func videoID(_ url: URL) -> String? { YouTubeLink.parse(url)?.videoID }
     func open(_ url: URL) {
+        // OAuth callbacks belong to the authentication session, not the content router.
+        guard let link = YouTubeLink.parse(url) else {
+            if url.scheme?.lowercased() == "betteryoutube" { message = "This YouTube link isn’t supported. Paste a video, playlist, channel, or search link." }
+            return
+        }
         guard isConfigured else { pendingOpen = url; return }
-        guard let id = Self.videoID(url) else { message = "Paste a YouTube video link or search for a video."; return }
-        play(Video(id: id, title: "YouTube video"))
+        incomingLinkRevision += 1
+        if let id = link.videoID {
+            message = nil
+            play(videos.first { $0.id == id } ?? Video(id: id, title: "YouTube video"), link: link)
+            if let c = URLComponents(url: link.url, resolvingAgainstBaseURL: false),
+               let list = c.queryItems?.first(where: { $0.name == "list" }), list.value?.isEmpty == false {
+                var playlist = c; playlist.path = "/playlist"
+                playlist.queryItems = c.queryItems?.filter { ["list", "index"].contains($0.name) }
+                tab = .home; subscriptionFeed = false; discoveryMode = false; showBrowser = true
+                if let url = playlist.url { loadFeed(url) }
+            }
+        } else {
+            closePlayer(); tab = .home; query = ""; discoveryMode = false; subscriptionFeed = false
+            showBrowser = true; loadFeed(link.url)
+        }
     }
-    func play(_ video: Video) {
+    func play(_ video: Video, link: YouTubeLink? = nil) {
         tracePlayback("selectVideo", ["id": video.id, "tab": tab.rawValue])
         pause(reason: "replaceVideo"); streamTimeout?.cancel(); statusObservation = nil; player.replaceCurrentItem(with: nil)
         releaseNativeAudio()
+        playbackRequestID = UUID().uuidString
+        pendingStart = (link?.start ?? 0) > 0 ? link?.start : nil; playbackEnd = link?.end
         attemptedStream = nil; nativeActive = false; current = video; inlinePlayerVisible = true
         fullScreen = false; muted = false; player.isMuted = false
         captionTracks = []; selectedCaptionID = ""; preferredCaptionID = ""; captionsLoaded = false; nativeCaptionGroup = nil
         player.defaultRate = Float(playbackSpeed)
         nativePictureInPicture = false; webPictureInPicture = false
-        elapsed = 0; duration = 0; playerMessage = "Loading video…"
-        playbackRequested = true
-        startingPlayback = true
+        elapsed = link?.start ?? 0; duration = 0; playerMessage = "Loading video…"
+        playbackRequested = link?.autoplay ?? true
+        startingPlayback = playbackRequested
         history.removeAll { $0.id == video.id }; history.insert(video, at: 0); history = Array(history.prefix(100)); persist(history, "history")
         if let file = offlinePlaybackURL(video.id) {
             nativeActive = true; playerMessage = "Downloaded · available offline"
-            activateAudio()
             playerWeb.loadHTMLString("", baseURL: nil)
             let item = AVPlayerItem(url: file)
-            player.replaceCurrentItem(with: item); player.play()
-            loadNativeCaptions(item)
+            player.replaceCurrentItem(with: item)
+            statusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+                Task { @MainActor in
+                    guard let self, self.player.currentItem === item else { return }
+                    if item.status == .readyToPlay {
+                        self.statusObservation = nil
+                        self.loadNativeCaptions(item)
+                        await self.seekNativeStart(item)
+                        guard self.player.currentItem === item else { return }
+                        if self.playbackRequested { self.activateAudio(); self.player.play() }
+                    } else if item.status == .failed {
+                        self.pendingStart = nil; self.startingPlayback = false
+                        self.playerMessage = "Couldn’t open the downloaded video."
+                    }
+                }
+            }
             return
         }
-        playerWeb.load(URLRequest(url: URL(string: "https://m.youtube.com/watch?v=\(video.id)&autoplay=1&playsinline=1")!))
+        var components = URLComponents(url: link?.url ?? video.url, resolvingAgainstBaseURL: false)!
+        components.host = "m.youtube.com"
+        components.queryItems = (components.queryItems ?? []) + [
+            URLQueryItem(name: "autoplay", value: playbackRequested && pendingStart == nil ? "1" : "0"),
+            URLQueryItem(name: "playsinline", value: "1"),
+            URLQueryItem(name: "by_request", value: playbackRequestID),
+            URLQueryItem(name: "by_start", value: String(link?.start ?? 0))]
+        if let end = playbackEnd { components.queryItems?.append(URLQueryItem(name: "by_end", value: String(end))) }
+        playerWeb.load(URLRequest(url: components.url!))
     }
+    private func seekNativeStart(_ item: AVPlayerItem) async {
+        guard let start = pendingStart else { return }
+        let duration = item.duration.seconds
+        let target = duration.isFinite && duration > 0 ? min(start, max(0, duration - 0.1)) : start
+        let finished = await player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        guard player.currentItem === item else { return }
+        if finished { pendingStart = nil; elapsed = target }
+    }
+
     func activateAudio() {
         guard nativeActive else { return }
         do {
@@ -481,7 +526,7 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
     }
     func closePlayer() {
         fullScreen = false
-        pause(); current = nil; nativeActive = false; inlinePlayerVisible = false
+        pause(); pendingStart = nil; playbackEnd = nil; playbackRequestID = UUID().uuidString; current = nil; nativeActive = false; inlinePlayerVisible = false
         nativePictureInPicture = false; webPictureInPicture = false
         streamTimeout?.cancel(); statusObservation = nil
         player.replaceCurrentItem(with: nil); playerWeb.loadHTMLString("", baseURL: nil)
@@ -519,10 +564,11 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         guard url.scheme == "https", host == "googlevideo.com" || host.hasSuffix(".googlevideo.com") else { return }
         attemptedStream = url.absoluteString
         let videoID = current?.id
+        let requestID = playbackRequestID
         Task {
             let agent = (try? await playerWeb.evaluateJavaScript("navigator.userAgent")) as? String ?? ""
             let cookies = await playerWeb.configuration.websiteDataStore.httpCookieStore.allCookies()
-            guard current?.id == videoID, attemptedStream == url.absoluteString else { return }
+            guard playbackRequestID == requestID, current?.id == videoID, attemptedStream == url.absoluteString else { return }
             prepareNativeStream(url, userAgent: agent, cookies: cookies)
         }
     }
@@ -537,7 +583,7 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
                 self.tracePlayback("nativeItem", ["status": item.status.rawValue])
                 if item.status == .readyToPlay && !self.nativeActive {
                     self.streamTimeout?.cancel()
-                    let time = self.elapsed
+                    let time = self.pendingStart ?? self.elapsed
                     self.nativeActive = true; self.playing = false
                     self.loadNativeCaptions(item)
                     self.startingPlayback = self.playbackRequested; self.playerMessage = nil
@@ -545,7 +591,8 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
                     // the delayed web pause can interrupt the new audio session.
                     _ = try? await self.playerWeb.evaluateJavaScript("window.BetterYouTube?.pause()")
                     guard self.player.currentItem === item, self.nativeActive else { return }
-                    await self.player.seek(to: CMTime(seconds: time, preferredTimescale: 600))
+                    self.pendingStart = time
+                    await self.seekNativeStart(item)
                     guard self.player.currentItem === item, self.nativeActive else { return }
                     if self.playbackRequested { self.activateAudio(); self.player.play() }
                     self.tracePlayback("handoffComplete")
@@ -608,7 +655,7 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
             if decoded.isEmpty && body["emptyHome"] as? Bool == true { loadDiscovery(); return }
             if !decoded.isEmpty { loading = false; self.message = nil; feedTimeout?.cancel() }
         }
-        guard message.webView === playerWeb else { return }
+        guard message.webView === playerWeb, body["requestID"] as? String == playbackRequestID else { return }
         if type == "diagnostic" {
             let allowed = ["name", "paused", "muted", "ready", "network", "time", "pending", "wants", "errorName", "presentation", "eventTrusted"]
             tracePlayback("webEvent", body.filter { allowed.contains($0.key) })
@@ -639,7 +686,11 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
             }
             #endif
             startingPlayback = !playing && playbackRequested && body["starting"] as? Bool == true
-            elapsed = body["time"] as? Double ?? 0; duration = body["duration"] as? Double ?? 0
+            if body["initialSeekPending"] as? Bool == false { pendingStart = nil }
+            if body["initialSeekFailed"] as? Bool == true { playerMessage = "This video couldn’t seek to the linked time." }
+            if pendingStart == nil { elapsed = body["time"] as? Double ?? 0 }
+            if body["linkEnded"] as? Bool == true { playbackRequested = false; startingPlayback = false }
+            duration = body["duration"] as? Double ?? 0
             if let title = body["title"] as? String, !title.isEmpty { current?.title = title }
             if playing && playerMessage == "Loading video…" { playerMessage = nil }
             if let current, let index = history.firstIndex(where: { $0.id == current.id }), history[index].title != current.title { history[index] = current; persist(history, "history") }
@@ -649,8 +700,8 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
-        if webView === feedWeb, navigationAction.navigationType == .linkActivated, let id = Self.videoID(url) {
-            play(videos.first(where: { $0.id == id }) ?? Video(id: id, title: "YouTube video")); decisionHandler(.cancel); return
+        if webView === feedWeb, navigationAction.navigationType == .linkActivated, Self.videoID(url) != nil {
+            open(url); decisionHandler(.cancel); return
         }
         if url.scheme == "about" { decisionHandler(.allow); return }
         guard url.scheme == "https" || url.scheme == "http" else { decisionHandler(.cancel); return }
