@@ -95,6 +95,8 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
     @Published var discoveryMode = false
     @Published var signedOut = true
     @Published var subscriptionFeed = false
+    @Published private(set) var followingChannelID: String?
+    var followingChannel: ChannelRule? { YouTubeAccount.shared.subscriptions.first { $0.id == followingChannelID } }
     private var feedRevision = 0
     private var channelFeedTask: Task<Void, Never>?
     @Published var blockAds = UserDefaults.standard.object(forKey: "blockAds") as? Bool ?? true
@@ -270,6 +272,11 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         if newTab == .subscriptions { loadFollowing() }
         if newTab == .library { feedRevision += 1; channelFeedTask?.cancel(); feedTimeout?.cancel(); feedWeb.stopLoading(); loading = false }
     }
+    func selectFollowingChannel(_ channelID: String?) {
+        guard tab == .subscriptions, YouTubeAccount.shared.signedIn else { return }
+        followingChannelID = channelID
+        loadFollowing()
+    }
     private func loadFollowing() {
         feedRevision += 1; channelFeedTask?.cancel(); feedTimeout?.cancel(); feedWeb.stopLoading()
         let account = YouTubeAccount.shared
@@ -277,16 +284,21 @@ struct CaptionTrack: Identifiable, Decodable, Equatable {
         videos = subscriptionFeed && account.signedIn ? videos.filter { ids.contains($0.channelID ?? "") } : []
         subscriptionFeed = true; discoveryMode = false; message = nil; loading = false
         // Website cookies and manually followed channels do not establish Google authorization.
-        guard account.signedIn else { return }
-        if !account.subscriptions.isEmpty { loadChannelFeed(account.subscriptions); return }
+        guard account.signedIn else { followingChannelID = nil; return }
+        if followingChannel == nil { followingChannelID = nil }
+        if !account.subscriptions.isEmpty { loadFollowingChannels(); return }
         loading = true
         let revision = feedRevision
         channelFeedTask = Task {
             await account.refreshSubscriptions()
             guard revision == feedRevision, tab == .subscriptions, account.signedIn else { return }
-            if !account.subscriptions.isEmpty { loadChannelFeed(account.subscriptions) }
+            if !account.subscriptions.isEmpty { loadFollowingChannels() }
             else { loading = false; message = account.error ?? "You haven’t subscribed to any channels yet." }
         }
+    }
+    private func loadFollowingChannels() {
+        if let channel = followingChannel { loadChannelFeed([channel]) }
+        else { loadChannelFeed(YouTubeAccount.shared.subscriptions) }
     }
     func loadChannelFeed(_ rules: [ChannelRule]) {
         let ids = Set(rules.map(\.id))

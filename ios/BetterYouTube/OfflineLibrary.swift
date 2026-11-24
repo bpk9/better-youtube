@@ -9,6 +9,7 @@ struct ChannelRule: Codable, Identifiable, Equatable {
     var title: String
     var enabled: Bool = false
     var error: String? = nil
+    var thumbnailURL: String? = nil
 }
 
 struct DownloadRecord: Codable, Identifiable {
